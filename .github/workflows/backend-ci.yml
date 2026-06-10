@@ -17,3 +17,32 @@ jobs:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
       - run: pytest
+
+  notify-discord:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord 알림 (한글)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ "${{ needs.test.result }}" = "success" ]; then
+            RESULT="통과"
+            TESTS="pytest"
+          else
+            RESULT="실패"
+            TESTS="pytest"
+          fi
+
+          PR_NUM="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+
+          CONTENT=$(printf '%s\n' \
+            "[BE] CI 완료" \
+            "PR #${PR_NUM} — ${PR_TITLE}" \
+            "결과: ${RESULT} (${TESTS})" \
+            "워크플로: backend-ci / test")
+
+          jq -n --arg content "$CONTENT" '{content: $content}' \
+            | curl -sS -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK_URL"

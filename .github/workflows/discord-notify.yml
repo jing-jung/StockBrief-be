@@ -1,0 +1,53 @@
+name: discord-notify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, closed]
+
+jobs:
+  notify:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true || github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord 알림 (한글)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          REPO="BE"
+          BRANCH="${{ github.ref_name }}"
+          ACTOR="${{ github.actor }}"
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SHA="${{ github.sha }}"
+            SHA_SHORT="${SHA:0:7}"
+            MSG="${{ github.event.head_commit.message }}"
+            CONTENT=$(printf '%s\n' \
+              "[${REPO}] push" \
+              "저장소: StockBrief-be" \
+              "브랜치: ${BRANCH}" \
+              "커밋: ${SHA_SHORT} — ${MSG}" \
+              "작성자: ${ACTOR}")
+          elif [ "${{ github.event.action }}" = "opened" ]; then
+            PR_NUM="${{ github.event.pull_request.number }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            HEAD="${{ github.event.pull_request.head.ref }}"
+            CONTENT=$(printf '%s\n' \
+              "[${REPO}] PR 열림 #${PR_NUM}" \
+              "브랜치: ${HEAD} → main" \
+              "제목: ${PR_TITLE}" \
+              "링크: ${{ github.event.pull_request.html_url }}")
+          else
+            PR_NUM="${{ github.event.pull_request.number }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            HEAD="${{ github.event.pull_request.head.ref }}"
+            CONTENT=$(printf '%s\n' \
+              "[${REPO}] PR 병합 #${PR_NUM}" \
+              "브랜치: ${HEAD} → main" \
+              "제목: ${PR_TITLE}" \
+              "상태: 성공")
+          fi
+
+          jq -n --arg content "$CONTENT" '{content: $content}' \
+            | curl -sS -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK_URL"
