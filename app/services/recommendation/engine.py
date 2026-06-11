@@ -94,7 +94,7 @@ def calculate_recommendation_score(
     fallback_data = sorted(
         {component.name for component in components if component.used_fallback}
     )
-    risk_penalty = round(sum(risk.penalty_points for risk in score_input.risks), 2)
+    risk_penalty = sum(risk.penalty_points for risk in score_input.risks)
     raw_total = sum(component.weighted_score for component in components)
     total_score = _clamp(round(raw_total - risk_penalty, 1), 0, 100)
     evidence_count = len({evidence.evidence_id for evidence in score_input.evidence})
@@ -123,12 +123,12 @@ def _component(
     missing_data = [] if raw_score is not None else [f"{name}.inputs"]
     weighted_score = 0.0
     if raw_score is not None:
-        weighted_score = round(_clamp(raw_score, 0, 100) * COMPONENT_WEIGHTS[name] / 100, 2)
+        weighted_score = _clamp(raw_score, 0, 100) * COMPONENT_WEIGHTS[name] / 100
 
     return ScoreComponent(
         name=name,
         weight=COMPONENT_WEIGHTS[name],
-        raw_score=None if raw_score is None else round(_clamp(raw_score, 0, 100), 2),
+        raw_score=None if raw_score is None else _clamp(raw_score, 0, 100),
         weighted_score=weighted_score,
         reason=_component_reason(name, raw_score, used_fallback),
         input_refs=required_keys,

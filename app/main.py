@@ -1,4 +1,5 @@
 from collections.abc import Callable
+import logging
 import uuid
 
 from fastapi import FastAPI, Request
@@ -11,6 +12,8 @@ from app.config import Settings, get_settings
 from app.models import ApiErrorResponse, ErrorDetail
 from app.protected_routes import router as protected_router
 from app.routes import router
+
+logger = logging.getLogger(__name__)
 
 
 def _error_response(
@@ -96,6 +99,20 @@ def create_app(settings_factory: Callable[[], Settings] = get_settings) -> FastA
                 }
                 for error in exc.errors()
             ],
+        )
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(
+        request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        logger.exception("Unexpected server error occurred: %s", str(exc))
+        return _error_response(
+            request=request,
+            status_code=500,
+            code="INTERNAL_ERROR",
+            message="서버 내부 오류가 발생했습니다.",
+            details=None,
         )
 
     app.include_router(router, prefix=settings.api_base_path)
