@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_optional_current_user
@@ -258,7 +258,11 @@ def search_stocks(
         )
     if market:
         statement = statement.where(Stock.market == market)
-    statement = statement.order_by(Stock.ticker.asc())
+        
+    total_statement = select(func.count()).select_from(statement.subquery())
+    total = session.scalar(total_statement) or 0
+
+    statement = statement.order_by(Stock.ticker.asc()).offset(offset).limit(limit)
     rows = session.scalars(statement).all()
 
     items = [
@@ -270,12 +274,12 @@ def search_stocks(
             corp_code=_corp_code(session, stock.ticker),
             match_reason=_match_reason(stock, q),
         )
-        for stock in rows[offset : offset + limit]
+        for stock in rows
     ]
     return StockSearchContractResponse(
         data=StockSearchContractData(
             items=items,
-            pagination=_pagination(limit=limit, offset=offset, total=len(rows)),
+            pagination=_pagination(limit=limit, offset=offset, total=total),
         ),
         message="종목 검색 결과를 반환했습니다.",
         request_id=_request_id(request),
