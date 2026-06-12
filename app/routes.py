@@ -1,3 +1,4 @@
+from collections import defaultdict
 from decimal import Decimal
 
 import uuid
@@ -138,7 +139,7 @@ def list_recommendation_candidates(
     session: Session = Depends(get_db_session),
 ) -> RecommendationCandidateListResponse:
     rows = _candidate_rows(session=session, market=market, sector=sector)
-    candidates = [_candidate_response(session, stock, score) for stock, score in rows]
+    candidates = _candidate_responses(session, rows)
     candidates = _sort_candidates(candidates, risk_profile)[:limit]
     return RecommendationCandidateListResponse(
         items=candidates,
@@ -177,15 +178,13 @@ def list_stock_candidates(
     session: Session = Depends(get_db_session),
 ) -> StockCandidateContractResponse:
     rows = _candidate_rows(session=session, market=market, sector=sector)
-    items = [
-        _stock_candidate_contract_item(session=session, stock=stock, score=score)
-        for stock, score in rows
-    ]
+    items = _stock_candidate_contract_items(rows, session=session)
+    risk_counts = _candidate_risk_counts(session, rows)
     items = _sort_stock_candidate_contract_items(
-        session=session,
         items=items,
         sort=sort,
         risk_profile=risk_profile,
+        risk_counts=risk_counts,
     )
     paged = items[offset : offset + limit]
     as_of = max((item.score.as_of for item in items), default=datetime.now(timezone.utc).date())
@@ -252,9 +251,11 @@ def search_stocks(
 ) -> StockSearchContractResponse:
     statement = select(Stock)
     if q:
-        query = f"%{q}%"
+        query = f"%{_escape_like_query(q)}%"
         statement = statement.where(
-            (Stock.ticker.like(query)) | (Stock.company_name.like(query))
+            (Stock.ticker.like(query, escape="\\")) | (
+                Stock.company_name.like(query, escape="\\")
+            )
         )
     if market:
         statement = statement.where(Stock.market == market)
@@ -264,6 +265,7 @@ def search_stocks(
 
     statement = statement.order_by(Stock.ticker.asc()).offset(offset).limit(limit)
     rows = session.scalars(statement).all()
+    corp_codes = _corp_codes(session, [stock.ticker for stock in rows])
 
     items = [
         StockSearchContractItem(
@@ -271,7 +273,7 @@ def search_stocks(
             name=stock.company_name,
             market=stock.market,
             sector=stock.sector,
-            corp_code=_corp_code(session, stock.ticker),
+            corp_code=corp_codes.get(stock.ticker),
             match_reason=_match_reason(stock, q),
         )
         for stock in rows
@@ -437,6 +439,23 @@ def _corp_code(session: Session, ticker: str) -> str | None:
     return identifier.identifier_value if identifier else None
 
 
+def _corp_codes(session: Session, tickers: list[str]) -> dict[str, str]:
+    if not tickers:
+        return {}
+    rows = session.scalars(
+        select(CompanyIdentifier).where(
+            CompanyIdentifier.ticker.in_(tickers),
+            CompanyIdentifier.provider == "OpenDART",
+            CompanyIdentifier.identifier_type == "corp_code",
+        )
+    ).all()
+    return {row.ticker: row.identifier_value for row in rows}
+
+
+def _escape_like_query(query: str) -> str:
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _match_reason(stock: Stock, query: str) -> str:
     if not query:
         return "default"
@@ -507,6 +526,59 @@ def _stock_candidate_contract_item(
     )
 
 
+def _stock_candidate_contract_items(
+    rows: list[tuple[Stock, RecommendationScore]],
+    *,
+    session: Session,
+) -> list[StockCandidateContractItem]:
+    tickers = [stock.ticker for stock, _ in rows]
+    prices = _latest_price_contracts(session, tickers)
+    evidence_summaries = _candidate_evidence_summaries(session, tickers)
+    return [
+        StockCandidateContractItem(
+            ticker=stock.ticker,
+            name=stock.company_name,
+            market=stock.market,
+            sector=stock.sector,
+            score=_stock_score_contract(score),
+            price=prices.get(stock.ticker),
+            evidence_summary=evidence_summaries.get(
+                stock.ticker,
+                CandidateEvidenceSummaryContract(
+                    news_count=0,
+                    disclosure_count=0,
+                    latest_at=None,
+                ),
+            ),
+        )
+        for stock, score in rows
+    ]
+
+
+def _latest_price_contracts(
+    session: Session,
+    tickers: list[str],
+) -> dict[str, StockPriceContract]:
+    if not tickers:
+        return {}
+    rows = session.scalars(
+        select(PriceMetric)
+        .where(PriceMetric.ticker.in_(tickers))
+        .order_by(PriceMetric.ticker.asc(), PriceMetric.trade_date.desc())
+    ).all()
+    prices: dict[str, StockPriceContract] = {}
+    for row in rows:
+        if row.ticker in prices:
+            continue
+        prices[row.ticker] = StockPriceContract(
+            close=_optional_float(row.close_price),
+            change_rate=_optional_float(row.change_rate),
+            volume=_optional_float(row.volume),
+            trade_date=row.trade_date,
+        )
+    return prices
+
+
 def _candidate_evidence_summary(
     session: Session,
     ticker: str,
@@ -526,12 +598,53 @@ def _candidate_evidence_summary(
     )
 
 
+def _candidate_evidence_summaries(
+    session: Session,
+    tickers: list[str],
+) -> dict[str, CandidateEvidenceSummaryContract]:
+    if not tickers:
+        return {}
+    summaries: dict[str, dict[str, object]] = {
+        ticker: {"news": 0, "disclosure": 0, "latest": None}
+        for ticker in tickers
+    }
+    rows = session.execute(
+        select(EvidenceChunk, SourceDocument)
+        .join(SourceDocument, SourceDocument.id == EvidenceChunk.source_document_id)
+        .where(
+            EvidenceChunk.ticker.in_(tickers),
+            SourceDocument.source_type.in_(["news", "disclosure"]),
+        )
+    ).all()
+    for chunk, source in rows:
+        summary = summaries.setdefault(
+            chunk.ticker,
+            {"news": 0, "disclosure": 0, "latest": None},
+        )
+        if source.source_type == "news":
+            summary["news"] = int(summary["news"]) + 1
+        elif source.source_type == "disclosure":
+            summary["disclosure"] = int(summary["disclosure"]) + 1
+        latest = summary["latest"]
+        published_at = chunk.published_at or source.published_at
+        if published_at is not None and (latest is None or published_at > latest):
+            summary["latest"] = published_at
+    return {
+        ticker: CandidateEvidenceSummaryContract(
+            news_count=int(summary["news"]),
+            disclosure_count=int(summary["disclosure"]),
+            latest_at=summary["latest"],
+        )
+        for ticker, summary in summaries.items()
+    }
+
+
 def _sort_stock_candidate_contract_items(
     *,
-    session: Session,
     items: list[StockCandidateContractItem],
     sort: str,
     risk_profile: RiskProfile,
+    risk_counts: dict[tuple[str, date], int],
 ) -> list[StockCandidateContractItem]:
     if sort == "volume_desc":
         return sorted(
@@ -545,7 +658,7 @@ def _sort_stock_candidate_contract_items(
         return sorted(
             items,
             key=lambda item: (
-                _candidate_risk_count(session, item.ticker, item.score.as_of),
+                risk_counts.get((item.ticker, item.score.as_of), 0),
                 -item.score.total,
             ),
         )
@@ -555,7 +668,7 @@ def _sort_stock_candidate_contract_items(
         items,
         key=lambda item: (
             item.score.total
-            - _candidate_risk_count(session, item.ticker, item.score.as_of) * 0.5
+            - risk_counts.get((item.ticker, item.score.as_of), 0) * 0.5
         ),
         reverse=True,
     )
@@ -566,14 +679,54 @@ def _candidate_risk_count(
     ticker: str,
     as_of_date: date,
 ) -> int:
-    return len(
-        session.scalars(
-            select(RiskSignal).where(
+    return int(
+        session.scalar(
+            select(func.count()).select_from(RiskSignal).where(
                 RiskSignal.ticker == ticker,
                 RiskSignal.as_of_date == as_of_date,
             )
-        ).all()
+        )
+        or 0
     )
+
+
+def _candidate_risk_pairs(
+    session: Session,
+    rows: list[tuple[Stock, RecommendationScore]],
+) -> set[tuple[str, date]]:
+    if not rows:
+        return set()
+    tickers = [stock.ticker for stock, _ in rows]
+    as_of_dates = [score.as_of_date for _, score in rows]
+    risks = session.execute(
+        select(RiskSignal.ticker, RiskSignal.as_of_date).where(
+            RiskSignal.ticker.in_(tickers),
+            RiskSignal.as_of_date.in_(as_of_dates),
+        )
+    ).all()
+    return {(ticker, as_of_date) for ticker, as_of_date in risks}
+
+
+def _candidate_risk_counts(
+    session: Session,
+    rows: list[tuple[Stock, RecommendationScore]],
+) -> dict[tuple[str, date], int]:
+    if not rows:
+        return {}
+    tickers = [stock.ticker for stock, _ in rows]
+    as_of_dates = [score.as_of_date for _, score in rows]
+    counts = session.execute(
+        select(RiskSignal.ticker, RiskSignal.as_of_date, func.count())
+        .where(
+            RiskSignal.ticker.in_(tickers),
+            RiskSignal.as_of_date.in_(as_of_dates),
+        )
+        .group_by(RiskSignal.ticker, RiskSignal.as_of_date)
+    ).all()
+    return {
+        (ticker, as_of_date): int(count)
+        for ticker, as_of_date, count in counts
+    }
 
 
 def _stock_brief_contract(
@@ -707,10 +860,12 @@ def _candidate_rows(
     if sector:
         statement = statement.where(Stock.sector == sector)
 
+    rows = session.execute(statement).all()
+    risk_pairs = _candidate_risk_pairs(session, rows)
     return [
         (stock, score)
-        for stock, score in session.execute(statement).all()
-        if _passes_evidence_gate(session, stock, score)
+        for stock, score in rows
+        if _passes_evidence_gate(stock, score, risk_pairs)
     ]
 
 
@@ -847,10 +1002,85 @@ def _candidate_response(
     )
 
 
-def _passes_evidence_gate(
+def _candidate_responses(
     session: Session,
+    rows: list[tuple[Stock, RecommendationScore]],
+) -> list[RecommendationCandidateResponse]:
+    if not rows:
+        return []
+    score_ids = [score.id for _, score in rows]
+    tickers = [stock.ticker for stock, _ in rows]
+    as_of_dates = [score.as_of_date for _, score in rows]
+
+    reasons_by_score_id: dict[object, list[RecommendationReason]] = defaultdict(list)
+    reasons = session.scalars(
+        select(RecommendationReason)
+        .where(RecommendationReason.recommendation_score_id.in_(score_ids))
+        .order_by(RecommendationReason.created_at.asc())
+    ).all()
+    for reason in reasons:
+        reasons_by_score_id[reason.recommendation_score_id].append(reason)
+
+    risks_by_key: dict[tuple[str, date], list[RiskSignal]] = defaultdict(list)
+    risks = session.scalars(
+        select(RiskSignal)
+        .where(
+            RiskSignal.ticker.in_(tickers),
+            RiskSignal.as_of_date.in_(as_of_dates),
+        )
+        .order_by(RiskSignal.created_at.asc())
+    ).all()
+    for risk in risks:
+        risks_by_key[(risk.ticker, risk.as_of_date)].append(risk)
+
+    return [
+        _candidate_response_from_loaded(
+            stock=stock,
+            score=score,
+            reasons=reasons_by_score_id.get(score.id, []),
+            risks=risks_by_key.get((stock.ticker, score.as_of_date), []),
+        )
+        for stock, score in rows
+    ]
+
+
+def _candidate_response_from_loaded(
+    *,
     stock: Stock,
     score: RecommendationScore,
+    reasons: list[RecommendationReason],
+    risks: list[RiskSignal],
+) -> RecommendationCandidateResponse:
+    return RecommendationCandidateResponse(
+        ticker=stock.ticker,
+        name=stock.company_name,
+        market=stock.market,
+        sector=stock.sector,
+        recommendation_score=_float(score.total_score),
+        score_components=_score_components(score.component_scores),
+        recommendation_reasons=[
+            RecommendationReasonResponse(
+                reason_id=reason.reason_id,
+                component=reason.component,
+                summary=reason.summary,
+                evidence_ids=list(reason.evidence_ids or []),
+                source_document_ids=list(reason.source_document_ids or []),
+            )
+            for reason in reasons
+        ],
+        risk_tags=[risk.risk_tag for risk in risks],
+        evidence_level=_evidence_level(score.evidence_level),
+        evidence_count=score.evidence_count,
+        missing_data=list(score.missing_data or []),
+        data_freshness=dict(score.data_freshness or {}),
+        disclaimer=DISCLAIMER,
+    )
+
+
+def _passes_evidence_gate(
+    stock: Stock,
+    score: RecommendationScore,
+    risk_pairs: set[tuple[str, date]],
 ) -> bool:
     if score.evidence_count < 2:
         return False
@@ -858,15 +1088,7 @@ def _passes_evidence_gate(
         return False
     if not isinstance(score.data_freshness, dict) or not score.data_freshness.get("as_of"):
         return False
-    risk_count = session.scalar(
-        select(RiskSignal)
-        .where(
-            RiskSignal.ticker == stock.ticker,
-            RiskSignal.as_of_date == score.as_of_date,
-        )
-        .limit(1)
-    )
-    return risk_count is not None
+    return (stock.ticker, score.as_of_date) in risk_pairs
 
 
 def _score_components(components: list[dict[str, object]]) -> list[ScoreComponentResponse]:

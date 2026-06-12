@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import auth
@@ -76,6 +77,68 @@ def test_cognito_claims_upsert_user_without_password_storage(seeded_session: Ses
     assert not hasattr(user, "password")
 
 
+def test_cognito_claims_upsert_recovers_from_concurrent_insert(
+    seeded_session: Session,
+    monkeypatch,
+) -> None:
+    claims = CognitoClaims(
+        sub="race-sub",
+        email="race@example.com",
+        email_verified=True,
+        nickname="race-user",
+    )
+    original_commit = seeded_session.commit
+    calls = {"count": 0}
+
+    def commit_once_with_race() -> None:
+        if calls["count"] == 0:
+            calls["count"] += 1
+            raise IntegrityError("insert users", {}, Exception("duplicate"))
+        original_commit()
+
+    def rollback_with_concurrent_user() -> None:
+        seeded_session.expunge_all()
+        original_commit()
+        concurrent_user = User(
+            cognito_sub=claims.sub,
+            email=claims.email,
+            email_verified=claims.email_verified,
+            nickname=claims.nickname,
+        )
+        seeded_session.add(concurrent_user)
+        original_commit()
+
+    monkeypatch.setattr(seeded_session, "commit", commit_once_with_race)
+    monkeypatch.setattr(seeded_session, "rollback", rollback_with_concurrent_user)
+
+    user = _upsert_user_from_claims(seeded_session, claims)
+
+    assert user.cognito_sub == "race-sub"
+    assert user.email == "race@example.com"
+
+
+def test_jwk_client_is_cached_per_url(monkeypatch) -> None:
+    auth._jwk_client.cache_clear()
+    created: list[str] = []
+
+    class DummyJwkClient:
+        def __init__(self, url: str, **kwargs) -> None:
+            created.append(url)
+            self.url = url
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(auth.jwt, "PyJWKClient", DummyJwkClient)
+
+    first = auth._jwk_client("https://issuer.example.com/.well-known/jwks.json")
+    second = auth._jwk_client("https://issuer.example.com/.well-known/jwks.json")
+
+    assert first is second
+    assert created == ["https://issuer.example.com/.well-known/jwks.json"]
+    assert first.kwargs["cache_jwk_set"] is True
+    assert first.kwargs["lifespan"] == 600
+    auth._jwk_client.cache_clear()
+
+
 def test_protected_api_accepts_valid_cognito_bearer_token(
     seeded_session: Session,
     monkeypatch,
@@ -84,7 +147,7 @@ def test_protected_api_accepts_valid_cognito_bearer_token(
         key = "unused-test-key"
 
     class DummyJwkClient:
-        def __init__(self, url: str) -> None:
+        def __init__(self, url: str, **kwargs) -> None:
             self.url = url
 
         def get_signing_key_from_jwt(self, token: str) -> DummySigningKey:

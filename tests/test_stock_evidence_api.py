@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 from sqlalchemy.orm import Session
 
 from app.orm import EvidenceChunk, FinancialStatement, PriceMetric, RecommendationScore, RiskSignal
@@ -43,6 +43,15 @@ def test_stock_search_returns_seeded_stocks(seeded_api_client: TestClient) -> No
         data["items"][0]
     )
     assert data["items"][0]["match_reason"] in {"name", "ticker", "keyword", "default"}
+
+
+def test_stock_search_escapes_like_wildcards(seeded_api_client: TestClient) -> None:
+    response = seeded_api_client.get("/v1/stocks/search", params={"q": "%"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"]["items"] == []
+    assert payload["data"]["pagination"]["total"] == 0
 
 
 def test_stock_detail_returns_identifiers(seeded_api_client: TestClient) -> None:
@@ -94,6 +103,28 @@ def test_stock_candidates_respect_risk_profile_sorting(
     assert conservative.status_code == 200
     assert aggressive.json()["data"]["items"][0]["ticker"] == "005930"
     assert conservative.json()["data"]["items"][0]["ticker"] != "005930"
+
+
+def test_stock_candidates_bulk_loads_candidate_related_data(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    engine = seeded_session.get_bind()
+    statements: list[str] = []
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        response = seeded_api_client.get("/v1/stocks/candidates", params={"limit": 20})
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["items"]
+    assert len(statements) <= 8
 
 
 def test_invalid_ticker_returns_contract_error(seeded_api_client: TestClient) -> None:

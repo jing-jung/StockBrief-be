@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request
 import jwt
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -89,7 +91,7 @@ def _claims_from_authorization_header(
 
     try:
         jwks_url = settings.cognito_jwks_url or f"{settings.cognito_issuer.rstrip('/')}/.well-known/jwks.json"
-        signing_key = jwt.PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+        signing_key = _jwk_client(jwks_url).get_signing_key_from_jwt(token)
         claims = jwt.decode(
             token,
             signing_key.key,
@@ -123,10 +125,21 @@ def _upsert_user_from_claims(session: Session, claims: CognitoClaims) -> User:
             nickname=claims.nickname,
         )
         session.add(user)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            user = session.scalars(select(User).where(User.cognito_sub == claims.sub)).first()
+            if user is None:
+                raise
+            return _sync_user_claims(session, user, claims)
         session.refresh(user)
         return user
 
+    return _sync_user_claims(session, user, claims)
+
+
+def _sync_user_claims(session: Session, user: User, claims: CognitoClaims) -> User:
     changed = False
     if user.email != claims.email:
         user.email = claims.email
@@ -141,6 +154,11 @@ def _upsert_user_from_claims(session: Session, claims: CognitoClaims) -> User:
         session.commit()
         session.refresh(user)
     return user
+
+
+@lru_cache
+def _jwk_client(jwks_url: str) -> jwt.PyJWKClient:
+    return jwt.PyJWKClient(jwks_url, cache_jwk_set=True, lifespan=600)
 
 
 def _optional_string(value: object) -> str | None:

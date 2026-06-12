@@ -2,6 +2,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 
 PROHIBITED_KOREAN_TERMS = [
@@ -58,6 +60,31 @@ def test_list_recommendation_candidates_from_seed(
     assert payload["count"] == 10
     assert len(payload["items"]) == 10
     _assert_candidate_shape(payload["items"][0])
+
+
+def test_recommendation_candidates_bulk_loads_related_data(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    engine = seeded_session.get_bind()
+    statements: list[str] = []
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        response = seeded_api_client.get(
+            "/v1/recommendations/candidates",
+            params={"limit": 20},
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    assert response.json()["items"]
+    assert len(statements) <= 5
 
 
 def test_list_recommendation_candidates_filters_and_limits(
