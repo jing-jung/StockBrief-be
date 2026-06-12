@@ -12,7 +12,12 @@ from app.services.external.aws_secrets import load_secret_json
 
 @lru_cache
 def get_engine() -> Engine:
-    return create_engine(resolve_database_url(), pool_pre_ping=True)
+    settings = get_settings()
+    return create_engine(
+        resolve_database_url(),
+        pool_pre_ping=True,
+        **_pool_options(settings),
+    )
 
 
 @lru_cache
@@ -69,3 +74,15 @@ def _database_url_from_secret_credentials(secret: dict[str, object]) -> str | No
         f"postgresql+psycopg://{user}:{secret_password}"
         f"@{settings.database_host}:{settings.database_port}/{settings.database_name}"
     )
+
+
+def _pool_options(settings) -> dict[str, int]:
+    database_url = resolve_database_url()
+    if database_url.startswith("sqlite"):
+        return {}
+    return {
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_max_overflow,
+        "pool_recycle": settings.database_pool_recycle_seconds,
+        "pool_timeout": settings.database_pool_timeout_seconds,
+    }

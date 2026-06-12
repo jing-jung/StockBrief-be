@@ -285,6 +285,34 @@ def test_server_watchlist_memo_patch(seeded_session: Session) -> None:
         app.dependency_overrides.clear()
 
 
+def test_watchlist_path_ticker_rejects_invalid_format(seeded_session: Session) -> None:
+    client = _authenticated_client(seeded_session)
+    try:
+        response = client.patch("/v1/me/watchlist/ABC", json={"memo": "review memo"})
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error"]["code"] == "INVALID_TICKER"
+        assert payload["error"]["details"] == [
+            {"field": "ticker", "reason": "invalid_format"}
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_watchlist_missing_item_uses_resource_specific_404_code(
+    seeded_session: Session,
+) -> None:
+    client = _authenticated_client(seeded_session)
+    try:
+        response = client.patch("/v1/me/watchlist/000660", json={"memo": "review memo"})
+
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "WATCHLIST_ITEM_NOT_FOUND"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_watchlist_import_merges_without_duplicate_tickers(
     seeded_session: Session,
 ) -> None:

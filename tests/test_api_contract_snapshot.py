@@ -67,7 +67,7 @@ def test_recommendation_candidate_schema_required_fields_snapshot(
     assert set(schema["required"]) >= (
         RECOMMENDATION_CANDIDATE_REQUIRED_FIELDS - {"missing_data"}
     )
-    assert schema["properties"]["score_components"]["minItems"] == 8
+    assert "minItems" not in schema["properties"]["score_components"]
     assert schema["properties"]["score_components"]["maxItems"] == 8
     assert schema["properties"]["recommendation_score"]["minimum"] == 0
     assert schema["properties"]["recommendation_score"]["maximum"] == 100

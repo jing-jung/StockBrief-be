@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import uuid
 from datetime import date, datetime, timezone
-import re
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
@@ -69,8 +69,10 @@ from app.orm import (
     User,
 )
 from app.services.chat import compose_chat_answer
+from app.ticker import validate_ticker
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 COMMON_ERROR_RESPONSES = {
     400: {"model": ApiErrorResponse, "description": "Request validation failed."},
@@ -397,16 +399,7 @@ def _request_id(request: Request) -> str:
 
 
 def _validate_ticker(ticker: str) -> None:
-    if re.fullmatch(r"\d{6}", ticker):
-        return
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "code": "INVALID_TICKER",
-            "message": "Ticker must be a 6-digit Korean stock ticker.",
-            "details": [{"field": "ticker", "reason": "invalid_format"}],
-        },
-    )
+    validate_ticker(ticker)
 
 
 def _pagination(*, limit: int, offset: int, total: int) -> PaginationResponse:
@@ -934,7 +927,13 @@ def _stock_or_404(session: Session, ticker: str) -> Stock:
     _validate_ticker(ticker)
     stock = session.get(Stock, ticker)
     if stock is None:
-        raise HTTPException(status_code=404, detail="Stock was not found.")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "STOCK_NOT_FOUND",
+                "message": "Stock was not found.",
+            },
+        )
     return stock
 
 
@@ -951,7 +950,10 @@ def _candidate_row(
     if row is None:
         raise HTTPException(
             status_code=404,
-            detail="Recommendation candidate was not found.",
+            detail={
+                "code": "STOCK_NOT_FOUND",
+                "message": "Recommendation candidate was not found.",
+            },
         )
     stock, score = row
     return stock, score
@@ -1105,9 +1107,9 @@ def _score_components(components: list[dict[str, object]]) -> list[ScoreComponen
         for component in components
     ]
     if len(responses) != 8:
-        raise HTTPException(
-            status_code=500,
-            detail="Stored recommendation score must contain 8 score components.",
+        logger.warning(
+            "Stored recommendation score has %s components; expected 8.",
+            len(responses),
         )
     return responses
 

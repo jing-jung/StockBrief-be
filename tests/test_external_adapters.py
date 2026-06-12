@@ -6,7 +6,13 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.orm import ApiCacheEntry, ExternalApiCallLog
 from app.services.external import NaverNewsClient, OpenDartClient
+from app.services.external.clients import BaseExternalApiClient
 from app.services.external.types import ExternalRequest, ExternalResponse, RateLimitPolicy
+
+
+def test_external_clients_share_base_template_methods() -> None:
+    assert issubclass(OpenDartClient, BaseExternalApiClient)
+    assert issubclass(NaverNewsClient, BaseExternalApiClient)
 
 
 def test_opendart_fallback_without_api_key_does_not_call_external_api(

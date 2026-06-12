@@ -25,6 +25,7 @@ from app.models import (
     UserPreferencesUpdateRequest,
 )
 from app.orm import ChatSession, Stock, User, UserPreference, Watchlist
+from app.ticker import validate_ticker
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -127,6 +128,7 @@ def update_watchlist_item(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> ServerWatchlistItemResponse:
+    validate_ticker(ticker)
     item = session.scalars(
         select(Watchlist).where(
             Watchlist.user_id == current_user.id,
@@ -134,7 +136,13 @@ def update_watchlist_item(
         )
     ).first()
     if item is None:
-        raise HTTPException(status_code=404, detail="Watchlist item was not found.")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "WATCHLIST_ITEM_NOT_FOUND",
+                "message": "Watchlist item was not found.",
+            },
+        )
     if "memo" in request.model_fields_set:
         item.memo = request.memo
     session.commit()
@@ -148,6 +156,7 @@ def delete_watchlist_item(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    validate_ticker(ticker)
     item = session.scalars(
         select(Watchlist).where(
             Watchlist.user_id == current_user.id,
@@ -296,7 +305,14 @@ def _chat_session_response(row: ChatSession) -> UserChatSessionResponse:
 
 
 def _stock_or_404(session: Session, ticker: str) -> Stock:
+    validate_ticker(ticker)
     stock = session.get(Stock, ticker)
     if stock is None:
-        raise HTTPException(status_code=404, detail="Stock was not found.")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "STOCK_NOT_FOUND",
+                "message": "Stock was not found.",
+            },
+        )
     return stock

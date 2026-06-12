@@ -249,7 +249,7 @@ class RecommendationCandidateResponse(BaseModel):
     market: str
     sector: str | None
     recommendation_score: float = Field(ge=0, le=100)
-    score_components: list[ScoreComponentResponse] = Field(min_length=8, max_length=8)
+    score_components: list[ScoreComponentResponse] = Field(max_length=8)
     recommendation_reasons: list[RecommendationReasonResponse]
     risk_tags: list[str]
     evidence_level: EvidenceLevel
@@ -270,7 +270,7 @@ class StockScoreResponse(BaseModel):
     ticker: str
     as_of_date: date
     recommendation_score: float = Field(ge=0, le=100)
-    score_components: list[ScoreComponentResponse] = Field(min_length=8, max_length=8)
+    score_components: list[ScoreComponentResponse] = Field(max_length=8)
     risk_tags: list[str]
     evidence_level: EvidenceLevel
     evidence_count: int = Field(ge=0)

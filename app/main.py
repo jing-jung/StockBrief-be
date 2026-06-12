@@ -50,7 +50,12 @@ def create_app(settings_factory: Callable[[], Settings] = get_settings) -> FastA
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Request-Id",
+            "x-request-id",
+        ],
     )
 
     @app.middleware("http")
@@ -72,7 +77,7 @@ def create_app(settings_factory: Callable[[], Settings] = get_settings) -> FastA
             raw_details = exc.detail.get("details")
             details = raw_details if isinstance(raw_details, list | dict) else None
         else:
-            code = "STOCK_NOT_FOUND" if exc.status_code == 404 else "INVALID_REQUEST"
+            code = "RESOURCE_NOT_FOUND" if exc.status_code == 404 else "INVALID_REQUEST"
             message = str(exc.detail) if exc.detail else "HTTP error occurred."
         return _error_response(
             request=request,

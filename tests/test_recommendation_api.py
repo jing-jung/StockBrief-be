@@ -3,7 +3,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import event
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.orm import RecommendationScore
 
 
 PROHIBITED_KOREAN_TERMS = [
@@ -182,3 +185,19 @@ def test_unknown_candidate_returns_common_error_response(
     assert response.status_code == 404
     assert response.json()["success"] is False
     assert response.json()["error"]["code"] == "STOCK_NOT_FOUND"
+
+
+def test_missing_score_components_degrade_without_500(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(RecommendationScore.ticker == "005930")
+    ).one()
+    score.component_scores = score.component_scores[:2]
+    seeded_session.commit()
+
+    response = seeded_api_client.get("/v1/recommendations/candidates/005930")
+
+    assert response.status_code == 200
+    assert len(response.json()["score_components"]) == 2

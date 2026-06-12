@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     database_host: str = Field(default="", validation_alias="DATABASE_HOST")
     database_port: int = Field(default=5432, validation_alias="DATABASE_PORT")
     database_name: str = Field(default="stockbrief", validation_alias="DATABASE_NAME")
+    database_pool_size: int = Field(default=5, validation_alias="DATABASE_POOL_SIZE")
+    database_max_overflow: int = Field(default=10, validation_alias="DATABASE_MAX_OVERFLOW")
+    database_pool_recycle_seconds: int = Field(default=1800, validation_alias="DATABASE_POOL_RECYCLE_SECONDS")
+    database_pool_timeout_seconds: int = Field(default=30, validation_alias="DATABASE_POOL_TIMEOUT_SECONDS")
     cors_allowed_origins: str = Field(
         default="http://localhost:3000,http://127.0.0.1:3000",
         validation_alias="CORS_ALLOWED_ORIGINS",

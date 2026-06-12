@@ -45,7 +45,7 @@ def test_not_found_uses_common_error_response() -> None:
     assert payload["success"] is False
     assert payload["request_id"].startswith("req_")
     assert payload["error"] == {
-        "code": "STOCK_NOT_FOUND",
+        "code": "RESOURCE_NOT_FOUND",
         "message": "Not Found",
         "details": None,
     }
@@ -70,11 +70,14 @@ def test_cors_preflight_allows_mutation_methods() -> None:
         headers={
             "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "authorization,x-request-id",
         },
     )
 
     assert response.status_code == 200
     assert "PATCH" in response.headers["access-control-allow-methods"]
+    assert "Authorization" in response.headers["access-control-allow-headers"]
+    assert "x-request-id" in response.headers["access-control-allow-headers"]
 
 
 def test_openapi_documents_common_error_response() -> None:

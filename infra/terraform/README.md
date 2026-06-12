@@ -177,6 +177,10 @@ RDS Proxy uses the RDS-managed master user secret when an RDS instance exists. L
 - `DATABASE_HOST`: RDS Proxy endpoint
 - `DATABASE_PORT`
 - `DATABASE_NAME`
+- `DATABASE_POOL_SIZE`: SQLAlchemy pool size, default `5`
+- `DATABASE_MAX_OVERFLOW`: extra connections above pool size, default `10`
+- `DATABASE_POOL_RECYCLE_SECONDS`: idle connection recycle window, default `1800`
+- `DATABASE_POOL_TIMEOUT_SECONDS`: checkout timeout, default `30`
 
 At runtime the backend uses `DATABASE_URL` directly when present in the secret. Otherwise, it builds a PostgreSQL URL from `DATABASE_HOST` plus the secret's `username` and `password`.
 

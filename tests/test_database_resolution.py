@@ -69,3 +69,30 @@ def test_resolve_database_url_builds_proxy_url_from_secret_credentials(monkeypat
         db.resolve_database_url()
         == "postgresql+psycopg://stockbrief_admin:secret%2Fpass@stockbrief.proxy-abc.ap-northeast-2.rds.amazonaws.com:5432/stockbrief"
     )
+
+
+def test_pool_options_are_configurable_for_postgresql(monkeypatch) -> None:
+    settings = Settings(
+        DATABASE_URL="postgresql+psycopg://stockbrief:stockbrief@db.example:5432/stockbrief",
+        DATABASE_POOL_SIZE=3,
+        DATABASE_MAX_OVERFLOW=4,
+        DATABASE_POOL_RECYCLE_SECONDS=900,
+        DATABASE_POOL_TIMEOUT_SECONDS=15,
+    )
+    monkeypatch.setattr(db, "get_settings", lambda: settings)
+    db.resolve_database_url.cache_clear()
+
+    assert db._pool_options(settings) == {
+        "pool_size": 3,
+        "max_overflow": 4,
+        "pool_recycle": 900,
+        "pool_timeout": 15,
+    }
+
+
+def test_pool_options_are_skipped_for_sqlite(monkeypatch) -> None:
+    settings = Settings(DATABASE_URL="sqlite+pysqlite:///:memory:")
+    monkeypatch.setattr(db, "get_settings", lambda: settings)
+    db.resolve_database_url.cache_clear()
+
+    assert db._pool_options(settings) == {}

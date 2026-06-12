@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,9 +25,7 @@ OPENDART_PROVIDER = "OpenDART"
 NAVER_PROVIDER = "NAVER_NEWS"
 
 
-class OpenDartClient:
-    base_url = "https://opendart.fss.or.kr/api"
-
+class BaseExternalApiClient:
     def __init__(
         self,
         *,
@@ -42,6 +40,166 @@ class OpenDartClient:
         self.rate_limit_policy = rate_limit_policy or RateLimitPolicy()
         self.cache = ExternalApiCacheService(session)
         self.logger = ExternalApiCallLogger(session)
+
+    def _from_cache(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        cache_key: str,
+    ) -> ExternalApiResult | None:
+        cached = self.cache.get(provider=provider, cache_key=cache_key)
+        if cached is None:
+            return None
+        self.logger.log(
+            provider=provider,
+            endpoint=endpoint,
+            method="CACHE",
+            request_params={"cache_key": cache_key},
+            status_code=200,
+            duration_ms=0,
+            error_code=None,
+        )
+        return _result_from_cached(
+            provider=provider,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            cached=cached,
+        )
+
+    def _fallback_result(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        cache_key: str,
+        payload: dict[str, Any],
+        missing_data: list[dict[str, Any]],
+        request_params: dict[str, Any],
+        error_code: str,
+    ) -> ExternalApiResult:
+        self.cache.set(
+            provider=provider,
+            cache_key=cache_key,
+            response_payload=_cache_payload(
+                payload=payload,
+                data_status="fallback",
+                missing_data=missing_data,
+            ),
+            status_code=None,
+        )
+        self.logger.log(
+            provider=provider,
+            endpoint=endpoint,
+            method="FALLBACK",
+            request_params=request_params,
+            status_code=None,
+            duration_ms=0,
+            error_code=error_code,
+        )
+        return ExternalApiResult(
+            provider=provider,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            payload=payload,
+            data_status="fallback",
+            status_code=None,
+            missing_data=missing_data,
+        )
+
+    def _request_result(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        cache_key: str,
+        request: ExternalRequest,
+        request_params: dict[str, Any],
+        fallback_payload: dict[str, Any],
+        fallback_field: str,
+        normalize_payload: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> ExternalApiResult:
+        started = time.monotonic()
+        status_code: int | None = None
+        try:
+            response = _request_with_backoff(
+                transport=self.transport,
+                request=request,
+                policy=self.rate_limit_policy,
+            )
+            status_code = response.status_code
+            if status_code != 200:
+                raise RuntimeError(f"unexpected_status_{status_code}")
+            payload = normalize_payload(response.payload) if normalize_payload else response.payload
+            self.cache.set(
+                provider=provider,
+                cache_key=cache_key,
+                response_payload=_cache_payload(
+                    payload=payload,
+                    data_status="available",
+                    missing_data=[],
+                ),
+                status_code=status_code,
+            )
+            self.logger.log(
+                provider=provider,
+                endpoint=endpoint,
+                method="GET",
+                request_params=request_params,
+                status_code=status_code,
+                duration_ms=_duration_ms(started),
+                error_code=None,
+            )
+            return ExternalApiResult(
+                provider=provider,
+                endpoint=endpoint,
+                cache_key=cache_key,
+                payload=payload,
+                data_status="available",
+                status_code=status_code,
+            )
+        except Exception as exc:
+            error_code = _error_code(exc)
+            missing_data = [
+                _missing_data(
+                    provider=provider,
+                    field=fallback_field,
+                    reason=error_code,
+                )
+            ]
+            payload = {**fallback_payload, "fallback": True, "missing_data": missing_data}
+            self.cache.set(
+                provider=provider,
+                cache_key=cache_key,
+                response_payload=_cache_payload(
+                    payload=payload,
+                    data_status="fallback",
+                    missing_data=missing_data,
+                ),
+                status_code=status_code,
+            )
+            self.logger.log(
+                provider=provider,
+                endpoint=endpoint,
+                method="GET",
+                request_params=request_params,
+                status_code=status_code,
+                duration_ms=_duration_ms(started),
+                error_code=error_code,
+            )
+            return ExternalApiResult(
+                provider=provider,
+                endpoint=endpoint,
+                cache_key=cache_key,
+                payload=payload,
+                data_status="fallback",
+                status_code=status_code,
+                missing_data=missing_data,
+            )
+
+
+class OpenDartClient(BaseExternalApiClient):
+    base_url = "https://opendart.fss.or.kr/api"
 
     def resolve_corp_code(self, ticker: str) -> str | None:
         identifier = self.session.scalars(
@@ -64,7 +222,11 @@ class OpenDartClient:
         endpoint = "/list.json"
         cache_key = f"disclosures:{ticker}:{resolved_corp_code or 'missing'}:{page_count}"
 
-        cached = self._from_cache(endpoint=endpoint, cache_key=cache_key)
+        cached = self._from_cache(
+            provider=OPENDART_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+        )
         if cached:
             return cached
 
@@ -102,26 +264,6 @@ class OpenDartClient:
         result.payload.setdefault("corp_code", resolved_corp_code)
         return result
 
-    def _from_cache(self, *, endpoint: str, cache_key: str) -> ExternalApiResult | None:
-        cached = self.cache.get(provider=OPENDART_PROVIDER, cache_key=cache_key)
-        if cached is None:
-            return None
-        self.logger.log(
-            provider=OPENDART_PROVIDER,
-            endpoint=endpoint,
-            method="CACHE",
-            request_params={"cache_key": cache_key},
-            status_code=200,
-            duration_ms=0,
-            error_code=None,
-        )
-        return _result_from_cached(
-            provider=OPENDART_PROVIDER,
-            endpoint=endpoint,
-            cache_key=cache_key,
-            cached=cached,
-        )
-
     def _fallback(
         self,
         *,
@@ -138,32 +280,13 @@ class OpenDartClient:
             "list": [],
             "missing_data": missing_data,
         }
-        self.cache.set(
-            provider=OPENDART_PROVIDER,
-            cache_key=cache_key,
-            response_payload=_cache_payload(
-                payload=payload,
-                data_status="fallback",
-                missing_data=missing_data,
-            ),
-            status_code=None,
-        )
-        self.logger.log(
+        return self._fallback_result(
             provider=OPENDART_PROVIDER,
             endpoint=endpoint,
-            method="FALLBACK",
+            cache_key=cache_key,
             request_params={"ticker": ticker, "reason": reason},
-            status_code=None,
-            duration_ms=0,
             error_code=reason,
-        )
-        return ExternalApiResult(
-            provider=OPENDART_PROVIDER,
-            endpoint=endpoint,
-            cache_key=cache_key,
             payload=payload,
-            data_status="fallback",
-            status_code=None,
             missing_data=missing_data,
         )
 
@@ -176,107 +299,24 @@ class OpenDartClient:
         fallback_payload: dict[str, Any],
         fallback_field: str,
     ) -> ExternalApiResult:
-        started = time.monotonic()
-        status_code: int | None = None
-        try:
-            response = _request_with_backoff(
-                transport=self.transport,
-                request=ExternalRequest(
-                    method="GET",
-                    url=f"{self.base_url}{endpoint}",
-                    params=params,
-                    timeout_seconds=self.rate_limit_policy.timeout_seconds,
-                ),
-                policy=self.rate_limit_policy,
-            )
-            status_code = response.status_code
-            if status_code != 200:
-                raise RuntimeError(f"unexpected_status_{status_code}")
-            payload = response.payload
-            self.cache.set(
-                provider=OPENDART_PROVIDER,
-                cache_key=cache_key,
-                response_payload=_cache_payload(
-                    payload=payload,
-                    data_status="available",
-                    missing_data=[],
-                ),
-                status_code=status_code,
-            )
-            self.logger.log(
-                provider=OPENDART_PROVIDER,
-                endpoint=endpoint,
+        return self._request_result(
+            provider=OPENDART_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            request=ExternalRequest(
                 method="GET",
-                request_params=params,
-                status_code=status_code,
-                duration_ms=_duration_ms(started),
-                error_code=None,
-            )
-            return ExternalApiResult(
-                provider=OPENDART_PROVIDER,
-                endpoint=endpoint,
-                cache_key=cache_key,
-                payload=payload,
-                data_status="available",
-                status_code=status_code,
-            )
-        except Exception as exc:
-            error_code = _error_code(exc)
-            missing_data = [
-                _missing_data(
-                    provider=OPENDART_PROVIDER,
-                    field=fallback_field,
-                    reason=error_code,
-                )
-            ]
-            payload = {**fallback_payload, "fallback": True, "missing_data": missing_data}
-            self.cache.set(
-                provider=OPENDART_PROVIDER,
-                cache_key=cache_key,
-                response_payload=_cache_payload(
-                    payload=payload,
-                    data_status="fallback",
-                    missing_data=missing_data,
-                ),
-                status_code=status_code,
-            )
-            self.logger.log(
-                provider=OPENDART_PROVIDER,
-                endpoint=endpoint,
-                method="GET",
-                request_params=params,
-                status_code=status_code,
-                duration_ms=_duration_ms(started),
-                error_code=error_code,
-            )
-            return ExternalApiResult(
-                provider=OPENDART_PROVIDER,
-                endpoint=endpoint,
-                cache_key=cache_key,
-                payload=payload,
-                data_status="fallback",
-                status_code=status_code,
-                missing_data=missing_data,
-            )
+                url=f"{self.base_url}{endpoint}",
+                params=params,
+                timeout_seconds=self.rate_limit_policy.timeout_seconds,
+            ),
+            request_params=params,
+            fallback_payload=fallback_payload,
+            fallback_field=fallback_field,
+        )
 
 
-class NaverNewsClient:
+class NaverNewsClient(BaseExternalApiClient):
     base_url = "https://openapi.naver.com/v1/search/news.json"
-
-    def __init__(
-        self,
-        *,
-        settings: Settings,
-        session: Session,
-        transport: ExternalTransport | None = None,
-        rate_limit_policy: RateLimitPolicy | None = None,
-    ) -> None:
-        self.settings = settings
-        self.session = session
-        self.transport = transport or urllib_transport
-        self.rate_limit_policy = rate_limit_policy or RateLimitPolicy()
-        self.cache = ExternalApiCacheService(session)
-        self.logger = ExternalApiCallLogger(session)
 
     def search_news(
         self,
@@ -287,23 +327,13 @@ class NaverNewsClient:
     ) -> ExternalApiResult:
         endpoint = "/v1/search/news.json"
         cache_key = f"news:{ticker}:{company_name}:{display}"
-        cached = self.cache.get(provider=NAVER_PROVIDER, cache_key=cache_key)
+        cached = self._from_cache(
+            provider=NAVER_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+        )
         if cached is not None:
-            self.logger.log(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
-                method="CACHE",
-                request_params={"cache_key": cache_key},
-                status_code=200,
-                duration_ms=0,
-                error_code=None,
-            )
-            return _result_from_cached(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
-                cache_key=cache_key,
-                cached=cached,
-            )
+            return cached
 
         if not self.settings.naver_client_id or not self.settings.naver_client_secret:
             return self._fallback(
@@ -315,97 +345,32 @@ class NaverNewsClient:
             )
 
         params = {"query": company_name, "display": display, "sort": "date"}
-        started = time.monotonic()
-        status_code: int | None = None
-        try:
-            response = _request_with_backoff(
-                transport=self.transport,
-                request=ExternalRequest(
-                    method="GET",
-                    url=self.base_url,
-                    params=params,
-                    headers={
-                        "X-Naver-Client-Id": self.settings.naver_client_id,
-                        "X-Naver-Client-Secret": self.settings.naver_client_secret,
-                    },
-                    timeout_seconds=self.rate_limit_policy.timeout_seconds,
-                ),
-                policy=self.rate_limit_policy,
-            )
-            status_code = response.status_code
-            if status_code != 200:
-                raise RuntimeError(f"unexpected_status_{status_code}")
-            payload = _normalize_naver_payload(response.payload)
-            payload["ticker"] = ticker
-            self.cache.set(
-                provider=NAVER_PROVIDER,
-                cache_key=cache_key,
-                response_payload=_cache_payload(
-                    payload=payload,
-                    data_status="available",
-                    missing_data=[],
-                ),
-                status_code=status_code,
-            )
-            self.logger.log(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
+        return self._request_result(
+            provider=NAVER_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            request=ExternalRequest(
                 method="GET",
-                request_params=params,
-                status_code=status_code,
-                duration_ms=_duration_ms(started),
-                error_code=None,
-            )
-            return ExternalApiResult(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
-                cache_key=cache_key,
-                payload=payload,
-                data_status="available",
-                status_code=status_code,
-            )
-        except Exception as exc:
-            error_code = _error_code(exc)
-            missing_data = [
-                _missing_data(
-                    provider=NAVER_PROVIDER,
-                    field="NAVER news response",
-                    reason=error_code,
-                )
-            ]
-            payload = _fallback_news_payload(
+                url=self.base_url,
+                params=params,
+                headers={
+                    "X-Naver-Client-Id": self.settings.naver_client_id,
+                    "X-Naver-Client-Secret": self.settings.naver_client_secret,
+                },
+                timeout_seconds=self.rate_limit_policy.timeout_seconds,
+            ),
+            request_params=params,
+            fallback_payload=_fallback_news_payload(
                 ticker=ticker,
                 company_name=company_name,
-                missing_data=missing_data,
-            )
-            self.cache.set(
-                provider=NAVER_PROVIDER,
-                cache_key=cache_key,
-                response_payload=_cache_payload(
-                    payload=payload,
-                    data_status="fallback",
-                    missing_data=missing_data,
-                ),
-                status_code=status_code,
-            )
-            self.logger.log(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
-                method="GET",
-                request_params=params,
-                status_code=status_code,
-                duration_ms=_duration_ms(started),
-                error_code=error_code,
-            )
-            return ExternalApiResult(
-                provider=NAVER_PROVIDER,
-                endpoint=endpoint,
-                cache_key=cache_key,
-                payload=payload,
-                data_status="fallback",
-                status_code=status_code,
-                missing_data=missing_data,
-            )
+                missing_data=[],
+            ),
+            fallback_field="NAVER news response",
+            normalize_payload=lambda payload: {
+                **_normalize_naver_payload(payload),
+                "ticker": ticker,
+            },
+        )
 
     def _fallback(
         self,
@@ -428,32 +393,13 @@ class NaverNewsClient:
             company_name=company_name,
             missing_data=missing_data,
         )
-        self.cache.set(
-            provider=NAVER_PROVIDER,
-            cache_key=cache_key,
-            response_payload=_cache_payload(
-                payload=payload,
-                data_status="fallback",
-                missing_data=missing_data,
-            ),
-            status_code=None,
-        )
-        self.logger.log(
+        return self._fallback_result(
             provider=NAVER_PROVIDER,
             endpoint=endpoint,
-            method="FALLBACK",
+            cache_key=cache_key,
             request_params={"ticker": ticker, "company_name": company_name, "reason": reason},
-            status_code=None,
-            duration_ms=0,
             error_code=reason,
-        )
-        return ExternalApiResult(
-            provider=NAVER_PROVIDER,
-            endpoint=endpoint,
-            cache_key=cache_key,
             payload=payload,
-            data_status="fallback",
-            status_code=None,
             missing_data=missing_data,
         )
 
