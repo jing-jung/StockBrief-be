@@ -41,8 +41,21 @@ def test_lambda_packaging_script_targets_backend_repository_root() -> None:
 
     assert 'API_DIR="${ROOT_DIR}"' in script
     assert 'PYTHON_BIN="${PYTHON_BIN:-python3.13}"' in script
+    assert 'LAMBDA_PLATFORM="${LAMBDA_PLATFORM:-manylinux2014_x86_64}"' in script
     assert '"${PYTHON_BIN}" -m pip install' in script
+    assert '--platform "${LAMBDA_PLATFORM}"' in script
+    assert "--only-binary=:all:" in script
+    assert 'cp -R "${API_DIR}/app" "${BUILD_DIR}/app"' in script
     assert "services/api" not in script
+
+
+def test_lambda_terraform_resource_tracks_package_hash() -> None:
+    module_main = (
+        REPOSITORY_ROOT / "infra/terraform/modules/api_lambda/main.tf"
+    ).read_text(encoding="utf-8")
+
+    assert "source_code_hash" in module_main
+    assert "filebase64sha256(var.package_path)" in module_main
 
 
 def test_terraform_readme_documents_multi_repository_layout() -> None:

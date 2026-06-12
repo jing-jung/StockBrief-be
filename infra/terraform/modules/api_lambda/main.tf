@@ -58,13 +58,14 @@ resource "aws_iam_role_policy" "agentcore_invoke" {
 }
 
 resource "aws_lambda_function" "api" {
-  function_name = "${var.name_prefix}-api"
-  role          = aws_iam_role.api_lambda.arn
-  handler       = "app.lambda_handler.handler"
-  runtime       = var.runtime
-  filename      = var.package_path
-  timeout       = var.timeout_seconds
-  memory_size   = var.memory_mb
+  function_name    = "${var.name_prefix}-api"
+  role             = aws_iam_role.api_lambda.arn
+  handler          = "app.lambda_handler.handler"
+  runtime          = var.runtime
+  filename         = var.package_path
+  source_code_hash = filebase64sha256(var.package_path)
+  timeout          = var.timeout_seconds
+  memory_size      = var.memory_mb
 
   environment {
     variables = merge(

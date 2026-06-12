@@ -47,7 +47,7 @@ Do not run `terraform apply` until AWS account, networking, repository connectio
    ./scripts/package_api_lambda.sh
    ```
 
-   The script defaults `PYTHON_BIN` to `python3.13` to match `requires-python = ">=3.13"` in `pyproject.toml` and the `python3.13` Lambda runtime. If your system resolves a different interpreter as `python3.13`, override the variable explicitly:
+   The script defaults `PYTHON_BIN` to `python3.13` to match `requires-python = ">=3.13"` in `pyproject.toml` and the `python3.13` Lambda runtime. It packages third-party dependencies as Linux `manylinux2014_x86_64` wheels for the Lambda zip, then copies the backend `app/` package into the zip root. If your system resolves a different interpreter as `python3.13`, override the variable explicitly:
 
    ```bash
    PYTHON_BIN=/usr/local/bin/python3.13 ./scripts/package_api_lambda.sh
@@ -130,7 +130,7 @@ Output zip:
 dist/stockbrief-api-lambda.zip
 ```
 
-The script installs the `StockBrief-be` package and dependencies into `dist/lambda-api`, removes Python cache directories, and zips the package. It does not include local `.env` files or secrets.
+The script installs Lambda-compatible third-party dependencies into `dist/lambda-api`, copies the backend `app/` package into the zip root, removes Python cache directories, and zips the package. It does not include local `.env` files or secrets.
 
 ## Amplify Hosting
 
