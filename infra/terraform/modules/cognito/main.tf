@@ -30,6 +30,10 @@ resource "aws_cognito_user_pool" "main" {
   verification_message_template {
     default_email_option = "CONFIRM_WITH_CODE"
   }
+
+  lifecycle {
+    ignore_changes = [schema]
+  }
 }
 
 resource "aws_cognito_user_pool_client" "web" {

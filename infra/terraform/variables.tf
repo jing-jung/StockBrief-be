@@ -112,6 +112,12 @@ variable "db_allocated_storage_gb" {
   default     = 20
 }
 
+variable "vpc_id" {
+  description = "VPC ID used for managed dev security groups and interface endpoints. Leave empty to provide security groups manually."
+  type        = string
+  default     = ""
+}
+
 variable "db_subnet_ids" {
   description = "Private subnet IDs for RDS. Placeholder until VPC module is added."
   type        = list(string)
@@ -119,19 +125,25 @@ variable "db_subnet_ids" {
 }
 
 variable "db_security_group_ids" {
-  description = "Security group IDs allowed to reach RDS. Placeholder until VPC module is added."
+  description = "Security group IDs attached to RDS. If empty and vpc_id is set, Terraform creates a dev RDS security group."
+  type        = list(string)
+  default     = []
+}
+
+variable "rds_proxy_security_group_ids" {
+  description = "Security group IDs attached to RDS Proxy. If empty and vpc_id is set, Terraform creates a dev proxy security group."
   type        = list(string)
   default     = []
 }
 
 variable "lambda_subnet_ids" {
-  description = "Private subnet IDs for Lambda VPC access. Placeholder until VPC module is added."
+  description = "Private subnet IDs for Lambda. MUST have a route to a NAT Gateway to allow external API and Cognito calls."
   type        = list(string)
   default     = []
 }
 
 variable "lambda_security_group_ids" {
-  description = "Security group IDs for Lambda. Placeholder until VPC module is added."
+  description = "Security group IDs for Lambda. If empty and vpc_id is set, Terraform creates a dev Lambda security group."
   type        = list(string)
   default     = []
 }

@@ -16,6 +16,105 @@ module "cloudwatch" {
   enable_amplify = var.enable_amplify
 }
 
+locals {
+  managed_networking_enabled = var.vpc_id != "" && length(var.db_subnet_ids) > 0 && length(var.lambda_subnet_ids) > 0
+
+  effective_lambda_security_group_ids = length(var.lambda_security_group_ids) > 0 ? var.lambda_security_group_ids : (
+    local.managed_networking_enabled ? [aws_security_group.lambda[0].id] : []
+  )
+
+  effective_rds_security_group_ids = length(var.db_security_group_ids) > 0 ? var.db_security_group_ids : (
+    local.managed_networking_enabled ? [aws_security_group.rds[0].id] : []
+  )
+
+  effective_rds_proxy_security_group_ids = length(var.rds_proxy_security_group_ids) > 0 ? var.rds_proxy_security_group_ids : (
+    local.managed_networking_enabled ? [aws_security_group.rds_proxy[0].id] : local.effective_rds_security_group_ids
+  )
+}
+
+resource "aws_security_group" "lambda" {
+  count = local.managed_networking_enabled ? 1 : 0
+
+  name        = "${local.name_prefix}-lambda-sg"
+  description = "Lambda egress for StockBrief API"
+  vpc_id      = var.vpc_id
+
+  egress {
+    description = "Allow outbound HTTPS and database connections"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "rds_proxy" {
+  count = local.managed_networking_enabled ? 1 : 0
+
+  name        = "${local.name_prefix}-rds-proxy-sg"
+  description = "RDS Proxy access from StockBrief API Lambda"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "PostgreSQL from Lambda"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda[0].id]
+  }
+
+  egress {
+    description = "Allow outbound connections to RDS"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group" "rds" {
+  count = local.managed_networking_enabled ? 1 : 0
+
+  name        = "${local.name_prefix}-rds-sg"
+  description = "RDS PostgreSQL access from StockBrief RDS Proxy"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "PostgreSQL from RDS Proxy"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.rds_proxy[0].id]
+  }
+}
+
+resource "aws_security_group" "secretsmanager_endpoint" {
+  count = local.managed_networking_enabled ? 1 : 0
+
+  name        = "${local.name_prefix}-secretsmanager-vpce-sg"
+  description = "Secrets Manager interface endpoint access from StockBrief API Lambda"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "HTTPS from Lambda"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda[0].id]
+  }
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  count = local.managed_networking_enabled ? 1 : 0
+
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.lambda_subnet_ids
+  security_group_ids  = [aws_security_group.secretsmanager_endpoint[0].id]
+  private_dns_enabled = true
+}
+
 module "cognito" {
   source = "./modules/cognito"
 
@@ -33,7 +132,7 @@ module "rds" {
   db_instance_class    = var.db_instance_class
   allocated_storage_gb = var.db_allocated_storage_gb
   subnet_ids           = var.db_subnet_ids
-  security_group_ids   = var.db_security_group_ids
+  security_group_ids   = local.effective_rds_security_group_ids
   secret_arn           = module.secrets.database_secret_arn
   log_group_name       = module.cloudwatch.rds_log_group_name
 }
@@ -44,7 +143,7 @@ module "rds_proxy" {
   name_prefix            = local.name_prefix
   db_instance_identifier = module.rds.db_instance_identifier
   subnet_ids             = var.db_subnet_ids
-  security_group_ids     = var.db_security_group_ids
+  security_group_ids     = local.effective_rds_proxy_security_group_ids
   secret_arn             = module.rds.db_secret_arn
 }
 
@@ -72,8 +171,8 @@ module "api_lambda" {
   timeout_seconds           = var.api_lambda_timeout_seconds
   memory_mb                 = var.api_lambda_memory_mb
   lambda_subnet_ids         = var.lambda_subnet_ids
-  lambda_security_group_ids = var.lambda_security_group_ids
-  database_secret_arn       = module.rds.db_secret_arn
+  lambda_security_group_ids = local.effective_lambda_security_group_ids
+  database_secret_arn       = module.secrets.database_secret_arn
   external_api_secret_arn   = module.secrets.external_api_secret_arn
   log_group_name            = module.cloudwatch.api_lambda_log_group_name
   api_gateway_log_group_arn = module.cloudwatch.api_gateway_log_group_arn

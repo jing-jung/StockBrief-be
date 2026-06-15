@@ -10,7 +10,7 @@ output "amplify_app_id" {
 
 output "database_secret_arn" {
   description = "Secrets Manager ARN for database connection material."
-  value       = module.rds.db_secret_arn
+  value       = module.secrets.database_secret_arn
   sensitive   = true
 }
 
