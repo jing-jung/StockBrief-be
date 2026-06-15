@@ -42,6 +42,7 @@ def test_lambda_packaging_script_targets_backend_repository_root() -> None:
     assert 'API_DIR="${ROOT_DIR}"' in script
     assert 'PYTHON_BIN="${PYTHON_BIN:-python3.13}"' in script
     assert 'LAMBDA_PLATFORM="${LAMBDA_PLATFORM:-manylinux2014_x86_64}"' in script
+    assert '"boto3", "botocore", "uvicorn"' in script
     assert '"${PYTHON_BIN}" -m pip install' in script
     assert '--platform "${LAMBDA_PLATFORM}"' in script
     assert "--only-binary=:all:" in script

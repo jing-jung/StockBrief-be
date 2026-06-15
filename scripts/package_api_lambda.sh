@@ -14,9 +14,18 @@ mkdir -p "${BUILD_DIR}" "${ROOT_DIR}/dist"
 REQUIREMENTS_FILE="$(mktemp)"
 trap 'rm -f "${REQUIREMENTS_FILE}"' EXIT
 
-"${PYTHON_BIN}" -c 'import pathlib, sys, tomllib
+"${PYTHON_BIN}" -c 'import pathlib, re, sys, tomllib
 dependencies = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["project"]["dependencies"]
-lambda_dependencies = [dep for dep in dependencies if not dep.lower().startswith("uvicorn")]
+excluded_runtime_dependencies = {"boto3", "botocore", "uvicorn"}
+
+def dependency_name(dependency):
+    return re.split(r"[<>=!~;\[]", dependency, maxsplit=1)[0].strip().lower()
+
+lambda_dependencies = [
+    dep
+    for dep in dependencies
+    if dependency_name(dep) not in excluded_runtime_dependencies
+]
 pathlib.Path(sys.argv[2]).write_text("\n".join(lambda_dependencies) + "\n")' \
   "${API_DIR}/pyproject.toml" \
   "${REQUIREMENTS_FILE}"
