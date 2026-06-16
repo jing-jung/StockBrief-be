@@ -21,6 +21,9 @@ db_security_group_ids     = []
 lambda_subnet_ids         = []
 lambda_security_group_ids = []
 
+enable_operational_alarms       = true
+operational_alarm_email_addresses = []
+
 agentcore_runtime_enabled       = false
 agentcore_runtime_container_uri = ""
 agentcore_network_mode          = "PUBLIC"

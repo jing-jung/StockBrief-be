@@ -148,6 +148,18 @@ variable "lambda_security_group_ids" {
   default     = []
 }
 
+variable "enable_operational_alarms" {
+  description = "Whether to create baseline CloudWatch operational alarms for Lambda, API Gateway, and RDS."
+  type        = bool
+  default     = true
+}
+
+variable "operational_alarm_email_addresses" {
+  description = "Email addresses subscribed to operational alarm SNS notifications. Leave empty to create alarms without notification actions."
+  type        = list(string)
+  default     = []
+}
+
 variable "agentcore_runtime_enabled" {
   description = "Whether to create the AgentCore Runtime CloudFormation stack. Requires agentcore_runtime_container_uri."
   type        = bool

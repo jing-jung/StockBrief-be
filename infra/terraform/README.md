@@ -297,6 +297,26 @@ Default retention:
 - RDS: 30 days
 - Amplify: 14 days
 
+## Operational Alarms
+
+Terraform creates baseline CloudWatch alarms when `enable_operational_alarms`
+is `true`:
+
+| Component | Alarm |
+| --- | --- |
+| API Lambda | Error rate > 5% for 2 of 3 minutes |
+| API Lambda | Any throttled invocation |
+| API Lambda | p99 duration above 80% of timeout for 2 of 3 minutes |
+| API Gateway HTTP API | Any 5xx response within 3 minutes |
+| API Gateway HTTP API | p99 latency > 5 seconds for 2 of 3 minutes |
+| RDS PostgreSQL | CPU utilization > 80% for 2 of 3 minutes |
+| RDS PostgreSQL | Free storage below 2 GiB for 2 of 3 minutes |
+
+Set `operational_alarm_email_addresses` to subscribe email recipients through
+SNS. Email subscriptions require each recipient to confirm the AWS SNS
+subscription email before notifications are delivered. Leave the list empty to
+create alarms without notification actions.
+
 ## Current Limitations
 
 - VPC, subnet, and security group modules are placeholders. Supply IDs through tfvars for now.
