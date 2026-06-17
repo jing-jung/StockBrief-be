@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
-from app.orm import Base, CompanyIdentifier, RecommendationScore, User, Watchlist
+from app.orm import Base, CompanyIdentifier, IngestionRun, RecommendationScore, User, Watchlist
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,6 +29,7 @@ EXPECTED_TABLES = {
     "users",
     "user_preferences",
     "watchlists",
+    "ingestion_runs",
 }
 
 
@@ -39,7 +40,7 @@ def test_metadata_contains_mvp_tables() -> None:
 def test_initial_migration_creates_mvp_tables() -> None:
     migration = (API_ROOT / "migrations/versions/0001_initial_mvp_schema.py").read_text()
 
-    for table_name in EXPECTED_TABLES - {"users", "user_preferences", "watchlists"}:
+    for table_name in EXPECTED_TABLES - {"users", "user_preferences", "watchlists", "ingestion_runs"}:
         assert f'"{table_name}"' in migration
 
 
@@ -78,6 +79,23 @@ def test_create_all_builds_core_tables_and_columns() -> None:
     user_columns = {column["name"] for column in inspector.get_columns("users")}
     assert {"id", "cognito_sub", "email", "email_verified", "nickname"}.issubset(user_columns)
     assert "password" not in user_columns
+
+
+def test_ingestion_runs_schema_is_declared() -> None:
+    table = Base.metadata.tables["ingestion_runs"]
+    assert {"run_id", "job_type", "provider", "status", "input_hash", "started_at"}.issubset(
+        table.c.keys()
+    )
+
+    constraints = {constraint.name for constraint in IngestionRun.__table__.constraints}
+    assert "uq_ingestion_runs_run_id" in constraints
+
+
+def test_ingestion_runs_migration_creates_table() -> None:
+    migration = (API_ROOT / "migrations/versions/0003_ingestion_runs.py").read_text()
+    assert '"ingestion_runs"' in migration
+    assert "uq_ingestion_runs_run_id" in migration
+    assert "ix_ingestion_runs_job_type_provider_status" in migration
 
 
 def test_required_uniqueness_constraints_are_declared() -> None:

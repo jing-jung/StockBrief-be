@@ -13,8 +13,11 @@ cognito_callback_urls           = ["http://localhost:3000/auth/callback"]
 cognito_logout_urls             = ["http://localhost:3000/account"]
 cognito_hosted_ui_domain_prefix = ""
 
-db_instance_class       = "db.t4g.micro"
-db_allocated_storage_gb = 20
+db_instance_class          = "db.t4g.micro"
+db_allocated_storage_gb    = 20
+db_deletion_protection     = false
+db_skip_final_snapshot     = true
+db_backup_retention_period = 1
 
 # Fill these after the dev VPC/subnets/security groups are chosen.
 db_subnet_ids             = []

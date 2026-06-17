@@ -127,14 +127,17 @@ module "cognito" {
 module "rds" {
   source = "./modules/rds"
 
-  name_prefix          = local.name_prefix
-  db_name              = var.db_name
-  db_instance_class    = var.db_instance_class
-  allocated_storage_gb = var.db_allocated_storage_gb
-  subnet_ids           = var.db_subnet_ids
-  security_group_ids   = local.effective_rds_security_group_ids
-  secret_arn           = module.secrets.database_secret_arn
-  log_group_name       = module.cloudwatch.rds_log_group_name
+  name_prefix             = local.name_prefix
+  db_name                 = var.db_name
+  db_instance_class       = var.db_instance_class
+  allocated_storage_gb    = var.db_allocated_storage_gb
+  subnet_ids              = var.db_subnet_ids
+  security_group_ids      = local.effective_rds_security_group_ids
+  secret_arn              = module.secrets.database_secret_arn
+  log_group_name          = module.cloudwatch.rds_log_group_name
+  deletion_protection     = var.db_deletion_protection
+  skip_final_snapshot     = var.db_skip_final_snapshot
+  backup_retention_period = var.db_backup_retention_period
 }
 
 module "rds_proxy" {

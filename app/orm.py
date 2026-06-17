@@ -409,3 +409,45 @@ class ChatMessage(Base):
     citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     safety_flags: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class IngestionRun(Base):
+    """Tracks each ingestion job run for idempotency and replay detection.
+
+    Every ingestion job must write a row here. Before re-running, check
+    `status` and `input_hash` to decide whether to skip or mark as replayed.
+
+    Provider upsert keys (used by ingestion jobs, not enforced here):
+    - OpenDART disclosure: provider + receipt_no
+    - NAVER news: provider + source_url_hash
+    - KRX price: ticker + trade_date + source
+    - financial statement: ticker + fiscal_year + fiscal_period + source_document_id
+    - source document: source_type + source_name + external_id, fallback content_hash
+    - score: ticker + as_of_date + score_version
+    """
+
+    __tablename__ = "ingestion_runs"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_ingestion_runs_run_id"),
+        Index("ix_ingestion_runs_job_type_provider_status", "job_type", "provider", "status"),
+        Index("ix_ingestion_runs_started_at", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid_pk)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    target_scope: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_counts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    error_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

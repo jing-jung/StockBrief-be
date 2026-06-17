@@ -112,6 +112,24 @@ variable "db_allocated_storage_gb" {
   default     = 20
 }
 
+variable "db_deletion_protection" {
+  description = "Protect the RDS instance from accidental deletion. Set false for dev."
+  type        = bool
+  default     = true
+}
+
+variable "db_skip_final_snapshot" {
+  description = "Skip the final snapshot on deletion. Set true for dev to avoid leftover snapshots."
+  type        = bool
+  default     = false
+}
+
+variable "db_backup_retention_period" {
+  description = "Days to retain automated RDS backups. 1 is sufficient for dev; 7 for prod."
+  type        = number
+  default     = 7
+}
+
 variable "vpc_id" {
   description = "VPC ID used for managed dev security groups and interface endpoints. Leave empty to provide security groups manually."
   type        = string

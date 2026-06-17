@@ -17,9 +17,9 @@ resource "aws_db_instance" "postgres" {
   manage_master_user_password = true
   db_subnet_group_name        = aws_db_subnet_group.postgres[0].name
   vpc_security_group_ids      = var.security_group_ids
-  backup_retention_period     = 7
-  deletion_protection         = true
-  skip_final_snapshot         = false
+  backup_retention_period     = var.backup_retention_period
+  deletion_protection         = var.deletion_protection
+  skip_final_snapshot         = var.skip_final_snapshot
   publicly_accessible         = false
   storage_encrypted           = true
 }
