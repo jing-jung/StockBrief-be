@@ -46,6 +46,12 @@ jobs:
             });
 
             const body = pr.body || "";
+            const labels = pr.labels.map((label) => label.name);
+            if (pr.user.login === "dependabot[bot]" || labels.includes("skip-pr-template")) {
+              core.info(`Skipping PR template gate for ${pr.user.login} or skip-pr-template label.`);
+              return;
+            }
+
             const requiredSections = [
               "요약",
               "배경 및 이유",

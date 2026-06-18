@@ -4,4 +4,46 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 1
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - python
+    groups:
+      runtime:
+        dependency-type: production
+        update-types:
+          - patch
+          - minor
+        patterns:
+          - alembic
+          - boto3
+          - fastapi
+          - mangum
+          - psycopg
+          - PyJWT
+          - pydantic
+          - pydantic-settings
+          - sqlalchemy
+          - uvicorn
+      tooling:
+        dependency-type: development
+        update-types:
+          - patch
+          - minor
+        patterns:
+          - httpx
+          - pytest
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    open-pull-requests-limit: 1
