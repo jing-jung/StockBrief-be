@@ -334,6 +334,11 @@ Provider upsert keys:
 | Source document | `source_type + source_name + external_id`, fallback `content_hash` |
 | Score | `ticker + as_of_date + score_version` |
 
+Provider ingestion stores raw payload archive references, when available, in
+`source_documents.metadata.raw_archive_uri` and each normalized row's
+`raw_payload.raw_archive_uri`. The S3 object is the immutable raw provider
+payload; RDS rows are the normalized query surface.
+
 ### chat_sessions
 
 Stores guest chat sessions.

@@ -112,3 +112,40 @@ def test_api_lambda_role_has_vpc_and_agentcore_invoke_permissions() -> None:
 
     assert "AWSLambdaVPCAccessExecutionRole" in api_lambda_tf
     assert "bedrock-agentcore:InvokeAgentRuntime" in api_lambda_tf
+
+
+def test_ingestion_pipeline_resources_are_wired_with_scheduler_disabled_by_default() -> None:
+    ingestion_tf = _read("ingestion.tf")
+    root_main_tf = _read("main.tf")
+    variables_tf = _read("variables.tf")
+    outputs_tf = _read("outputs.tf")
+    api_lambda_tf = _read("modules/api_lambda/main.tf")
+    dev_tfvars = _read("envs/dev/terraform.tfvars.example")
+
+    assert 'variable "enable_ingestion_scheduler"' in variables_tf
+    assert "default     = false" in variables_tf
+    assert "aws_s3_bucket\" \"ingestion_raw" in ingestion_tf
+    assert "aws_kms_key\" \"ingestion_raw" in ingestion_tf
+    assert "enable_key_rotation     = true" in ingestion_tf
+    assert 'sse_algorithm     = "aws:kms"' in ingestion_tf
+    assert "aws_sqs_queue\" \"ingestion_dlq" in ingestion_tf
+    assert "sqs_managed_sse_enabled   = true" in ingestion_tf
+    assert "aws_scheduler_schedule\" \"provider_ingestion" in ingestion_tf
+    assert "local.ingestion_scheduler_enabled" in ingestion_tf
+    assert "length(var.ingestion_schedule_tickers) > 0" in ingestion_tf
+    assert "stockbrief_operation = \"ingest_provider_batch\"" in ingestion_tf
+    assert "raise_on_failure     = true" in ingestion_tf
+    assert "INGESTION_RAW_BUCKET" in root_main_tf
+    assert "INGESTION_RAW_BUCKET" in api_lambda_tf
+    assert "s3:PutObject" in api_lambda_tf
+    assert "kms:GenerateDataKey" in api_lambda_tf
+    assert 'output "ingestion_raw_bucket_name"' in outputs_tf
+    assert 'output "ingestion_raw_kms_key_arn"' in outputs_tf
+    assert 'output "ingestion_dlq_url"' in outputs_tf
+    assert "enable_ingestion_scheduler          = false" in dev_tfvars
+
+
+def test_secret_versions_do_not_reclaim_manually_rotated_current_values() -> None:
+    secrets_tf = _read("modules/secrets/main.tf")
+
+    assert secrets_tf.count("ignore_changes = all") == 2

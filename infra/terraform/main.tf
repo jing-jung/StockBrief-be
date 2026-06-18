@@ -183,6 +183,9 @@ module "api_lambda" {
   database_host             = var.enable_rds_proxy ? module.rds_proxy.proxy_endpoint : module.rds.db_endpoint
   database_port             = 5432
   database_name             = var.db_name
+  ingestion_raw_bucket_name = try(aws_s3_bucket.ingestion_raw[0].bucket, "")
+  ingestion_raw_bucket_arn  = try(aws_s3_bucket.ingestion_raw[0].arn, "")
+  ingestion_raw_kms_key_arn = try(aws_kms_key.ingestion_raw[0].arn, "")
   agentcore_runtime_arn     = module.agentcore_runtime.runtime_arn
   jwt_authorizer_enabled    = true
   jwt_authorizer_issuer     = module.cognito.issuer
@@ -198,6 +201,7 @@ module "api_lambda" {
     COGNITO_APP_CLIENT_ID = module.cognito.app_client_id
     COGNITO_ISSUER        = module.cognito.issuer
     COGNITO_JWKS_URL      = "${module.cognito.issuer}/.well-known/jwks.json"
+    INGESTION_RAW_BUCKET  = try(aws_s3_bucket.ingestion_raw[0].bucket, "")
   }
 }
 

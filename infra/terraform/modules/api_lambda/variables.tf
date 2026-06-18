@@ -59,6 +59,21 @@ variable "database_name" {
   default = "stockbrief"
 }
 
+variable "ingestion_raw_bucket_name" {
+  type    = string
+  default = ""
+}
+
+variable "ingestion_raw_bucket_arn" {
+  type    = string
+  default = ""
+}
+
+variable "ingestion_raw_kms_key_arn" {
+  type    = string
+  default = ""
+}
+
 variable "agentcore_runtime_arn" {
   type    = string
   default = ""

@@ -5,6 +5,7 @@ from alembic.config import Config
 
 from app.db import get_session_factory
 from app.seed.seed_mock_data import seed_mock_data
+from app.services.ingestion import handle_ingestion_event
 
 
 def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
@@ -15,10 +16,17 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         return migrate()
     if operation == "seed_mock_data":
         return seed()
+    if operation == "ingest_provider_batch":
+        return handle_ingestion_event(event)
     return {
         "ok": False,
         "error": "unsupported_operation",
-        "supported_operations": ["migrate", "seed_mock_data", "migrate_and_seed"],
+        "supported_operations": [
+            "migrate",
+            "seed_mock_data",
+            "migrate_and_seed",
+            "ingest_provider_batch",
+        ],
     }
 
 

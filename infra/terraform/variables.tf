@@ -212,3 +212,50 @@ variable "agentcore_network_mode" {
     error_message = "agentcore_network_mode must be PUBLIC or VPC."
   }
 }
+
+variable "enable_ingestion_raw_archive" {
+  description = "Whether to create the S3 raw payload archive used by provider ingestion jobs."
+  type        = bool
+  default     = true
+}
+
+variable "ingestion_raw_retention_days" {
+  description = "Number of days to retain raw provider payloads in the dev archive bucket."
+  type        = number
+  default     = 30
+}
+
+variable "enable_ingestion_scheduler" {
+  description = "Whether to create an EventBridge Scheduler rule for provider ingestion. Keep false until provider credentials and target tickers are approved."
+  type        = bool
+  default     = false
+}
+
+variable "ingestion_schedule_expression" {
+  description = "EventBridge Scheduler expression for provider ingestion."
+  type        = string
+  default     = "cron(0 18 ? * MON-FRI *)"
+}
+
+variable "ingestion_schedule_provider" {
+  description = "Provider passed to the scheduled ingest_provider_batch operation."
+  type        = string
+  default     = "OpenDART"
+
+  validation {
+    condition     = contains(["OpenDART", "NAVER_NEWS"], var.ingestion_schedule_provider)
+    error_message = "ingestion_schedule_provider must be OpenDART or NAVER_NEWS."
+  }
+}
+
+variable "ingestion_schedule_tickers" {
+  description = "Tickers passed to the scheduled ingest_provider_batch operation."
+  type        = list(string)
+  default     = []
+}
+
+variable "ingestion_dlq_message_retention_seconds" {
+  description = "Retention period for failed ingestion scheduler invocation messages."
+  type        = number
+  default     = 1209600
+}

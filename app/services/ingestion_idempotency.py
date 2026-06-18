@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.orm import IngestionRun
@@ -15,6 +16,7 @@ class IngestionIdempotencyService:
     """Track ingestion runs so provider jobs can be safely retried."""
 
     SUCCEEDED_STATUS = "succeeded"
+    RESTARTABLE_STATUSES = {"failed", "partial_failed"}
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -59,6 +61,68 @@ class IngestionIdempotencyService:
         self.session.commit()
         self.session.refresh(run)
         return run
+
+    def start_or_restart_run(
+        self,
+        *,
+        run_id: str,
+        job_type: str,
+        provider: str,
+        target_scope: dict[str, Any],
+        input_hash: str,
+    ) -> IngestionRun:
+        existing = self.session.scalars(
+            select(IngestionRun).where(IngestionRun.run_id == run_id).with_for_update()
+        ).first()
+        if existing is None:
+            try:
+                return self.start_run(
+                    run_id=run_id,
+                    job_type=job_type,
+                    provider=provider,
+                    target_scope=target_scope,
+                    input_hash=input_hash,
+                )
+            except IntegrityError:
+                self.session.rollback()
+                existing = self.session.scalars(
+                    select(IngestionRun)
+                    .where(IngestionRun.run_id == run_id)
+                    .with_for_update()
+                ).first()
+                if existing is None:
+                    raise
+
+        if existing.status == self.SUCCEEDED_STATUS and existing.input_hash == input_hash:
+            return existing
+        if existing.status not in self.RESTARTABLE_STATUSES:
+            raise ValueError(f"ingestion_run_already_active:{run_id}")
+
+        existing.job_type = job_type
+        existing.provider = provider
+        existing.target_scope = target_scope
+        existing.status = "started"
+        existing.input_hash = input_hash
+        existing.started_at = datetime.now(timezone.utc)
+        existing.completed_at = None
+        existing.result_counts = {}
+        existing.error_summary = None
+        self.session.commit()
+        self.session.refresh(existing)
+        return existing
+
+    def mark_failed_by_run_id(
+        self,
+        *,
+        run_id: str,
+        error_summary: dict[str, Any],
+    ) -> IngestionRun:
+        run = self.session.scalars(
+            select(IngestionRun).where(IngestionRun.run_id == run_id)
+        ).first()
+        if run is None:
+            raise ValueError(f"ingestion_run_not_found:{run_id}")
+        return self.mark_failed(run=run, error_summary=error_summary)
 
     def mark_succeeded(
         self,

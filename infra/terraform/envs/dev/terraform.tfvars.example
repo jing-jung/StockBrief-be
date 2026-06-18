@@ -35,3 +35,11 @@ operational_alarm_email_addresses = []
 agentcore_runtime_enabled       = false
 agentcore_runtime_container_uri = ""
 agentcore_network_mode          = "PUBLIC"
+
+enable_ingestion_raw_archive        = true
+ingestion_raw_retention_days        = 30
+enable_ingestion_scheduler          = false
+ingestion_schedule_expression       = "cron(0 18 ? * MON-FRI *)"
+ingestion_schedule_provider         = "OpenDART"
+ingestion_schedule_tickers          = []
+ingestion_dlq_message_retention_seconds = 1209600

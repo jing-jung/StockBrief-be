@@ -114,7 +114,7 @@ def test_opendart_fallback_without_api_key_does_not_call_external_api(
     assert log.error_code == "missing_api_key"
 
 
-def test_opendart_success_uses_corp_code_mapping_cache_and_secret_redaction(
+def test_opendart_success_uses_corp_code_mapping_without_logging_secret(
     seeded_session: Session,
 ) -> None:
     calls: list[ExternalRequest] = []
@@ -149,6 +149,7 @@ def test_opendart_success_uses_corp_code_mapping_cache_and_secret_redaction(
     assert result.data_status == "available"
     assert result.payload["list"][0]["corp_code"] == "MOCK00126380"
     assert calls[0].params["corp_code"] == "MOCK00126380"
+    assert calls[0].params["crtfc_key"] == "opendart-secret"
     assert cached_result.from_cache is True
 
     logs = seeded_session.scalars(
@@ -156,7 +157,11 @@ def test_opendart_success_uses_corp_code_mapping_cache_and_secret_redaction(
     ).all()
     request_params = [log.request_params for log in logs if log.method == "GET"]
     assert request_params
-    assert request_params[-1]["crtfc_key"] == "[REDACTED]"
+    assert "crtfc_key" not in request_params[-1]
+    assert request_params[-1] == {
+        "corp_code": "MOCK00126380",
+        "page_count": 10,
+    }
     assert "opendart-secret" not in str(request_params)
 
 

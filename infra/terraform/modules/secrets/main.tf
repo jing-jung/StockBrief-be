@@ -10,7 +10,7 @@ resource "aws_secretsmanager_secret_version" "database_placeholder" {
   })
 
   lifecycle {
-    ignore_changes = [secret_string]
+    ignore_changes = all
   }
 }
 
@@ -29,6 +29,6 @@ resource "aws_secretsmanager_secret_version" "external_api_placeholder" {
   })
 
   lifecycle {
-    ignore_changes = [secret_string]
+    ignore_changes = all
   }
 }

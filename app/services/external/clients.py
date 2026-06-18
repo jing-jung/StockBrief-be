@@ -253,10 +253,15 @@ class OpenDartClient(BaseExternalApiClient):
             "corp_code": resolved_corp_code,
             "page_count": page_count,
         }
+        safe_request_params = {
+            "corp_code": resolved_corp_code,
+            "page_count": page_count,
+        }
         result = self._request(
             endpoint=endpoint,
             cache_key=cache_key,
             params=params,
+            request_params=safe_request_params,
             fallback_payload={"ticker": ticker, "corp_code": resolved_corp_code, "list": []},
             fallback_field="OpenDART response",
         )
@@ -296,6 +301,7 @@ class OpenDartClient(BaseExternalApiClient):
         endpoint: str,
         cache_key: str,
         params: dict[str, Any],
+        request_params: dict[str, Any],
         fallback_payload: dict[str, Any],
         fallback_field: str,
     ) -> ExternalApiResult:
@@ -309,7 +315,7 @@ class OpenDartClient(BaseExternalApiClient):
                 params=params,
                 timeout_seconds=self.rate_limit_policy.timeout_seconds,
             ),
-            request_params=params,
+            request_params=request_params,
             fallback_payload=fallback_payload,
             fallback_field=fallback_field,
         )

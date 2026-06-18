@@ -1,0 +1,481 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.config import Settings
+from app.orm import Disclosure, IngestionRun, NewsItem, SourceDocument
+from app.services.external.clients import NAVER_PROVIDER, OPENDART_PROVIDER
+from app.services.external.types import ExternalApiResult
+from app.services import ingestion as ingestion_module
+from app.services.ingestion import (
+    NoopPayloadArchiver,
+    ProviderIngestionRequest,
+    ProviderIngestionService,
+    build_request_hash,
+    build_run_id,
+    hydrate_external_api_settings,
+    handle_ingestion_event,
+)
+
+
+class RecordingArchiver:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def archive(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        ticker: str,
+        payload: dict[str, Any],
+    ) -> str:
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "provider": provider,
+                "ticker": ticker,
+                "payload": payload,
+            }
+        )
+        return f"s3://stockbrief-dev-raw/{provider}/{ticker}/{run_id}.json"
+
+
+def test_build_request_hash_uses_provider_ticker_source_date_and_request_params() -> None:
+    base = build_request_hash(
+        provider=OPENDART_PROVIDER,
+        ticker="005930",
+        source_date="2026-06-18",
+        request_params={"page_count": 10},
+    )
+
+    assert base == build_request_hash(
+        provider=OPENDART_PROVIDER,
+        ticker="005930",
+        source_date="2026-06-18",
+        request_params={"page_count": 10},
+    )
+    assert base != build_request_hash(
+        provider=OPENDART_PROVIDER,
+        ticker="005930",
+        source_date="2026-06-19",
+        request_params={"page_count": 10},
+    )
+    assert base != build_request_hash(
+        provider=OPENDART_PROVIDER,
+        ticker="000660",
+        source_date="2026-06-18",
+        request_params={"page_count": 10},
+    )
+
+
+def test_provider_ingestion_request_normalizes_event_fields() -> None:
+    request = ProviderIngestionRequest.from_event(
+        {
+            "provider": "naver-news",
+            "tickers": "005930, 000660",
+            "page_count": "0",
+            "news_display": "3",
+        }
+    )
+
+    assert request.provider == NAVER_PROVIDER
+    assert request.tickers == ["005930", "000660"]
+    assert request.page_count == 10
+    assert request.news_display == 3
+
+
+def test_opendart_ingestion_upserts_disclosures_and_sources(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key=f"disclosures:{ticker}:mock:{page_count}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "list": [
+                    {
+                        "rcept_no": "202606180001",
+                        "report_nm": "반기보고서",
+                        "rcept_dt": "20260618",
+                        "rm": "정기공시",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    archiver = RecordingArchiver()
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY="test-key"),
+        archiver=archiver,
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+        )
+    )
+    replay = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["status"] == "succeeded"
+    assert result["results"][0]["result_counts"] == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
+    assert replay["results"][0]["status"] == "replayed"
+    assert len(archiver.calls) == 1
+
+    disclosure = seeded_session.scalars(
+        select(Disclosure).where(Disclosure.receipt_no == "202606180001")
+    ).one()
+    assert disclosure.provider == OPENDART_PROVIDER
+    assert disclosure.raw_payload["raw_archive_uri"].startswith("s3://stockbrief-dev-raw/")
+
+    source_document = seeded_session.scalars(
+        select(SourceDocument).where(
+            SourceDocument.source_name == OPENDART_PROVIDER,
+            SourceDocument.external_id == "202606180001",
+        )
+    ).one()
+    assert source_document.source_type == "disclosure"
+    assert source_document.metadata_["raw_archive_uri"].startswith("s3://stockbrief-dev-raw/")
+
+    run = seeded_session.scalars(
+        select(IngestionRun).where(
+            IngestionRun.run_id == build_run_id(
+                provider=OPENDART_PROVIDER,
+                source_date="2026-06-18",
+                ticker="005930",
+            )
+        )
+    ).one()
+    assert run.status == "succeeded"
+
+
+def test_explicit_run_id_is_scoped_per_ticker_in_batch(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key=f"disclosures:{ticker}:mock:{page_count}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "list": [
+                    {
+                        "rcept_no": f"20260618{ticker}",
+                        "report_nm": "반기보고서",
+                        "rcept_dt": "20260618",
+                        "rm": "정기공시",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY="test-key"),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930", "000660"],
+            source_date="2026-06-18",
+            run_id="manual-run",
+        )
+    )
+
+    assert result["ok"] is True
+    assert [item["run_id"] for item in result["results"]] == [
+        "manual-run-005930",
+        "manual-run-000660",
+    ]
+
+    runs = seeded_session.scalars(
+        select(IngestionRun)
+        .where(IngestionRun.run_id.in_(["manual-run-005930", "manual-run-000660"]))
+        .order_by(IngestionRun.run_id)
+    ).all()
+    assert len(runs) == 2
+    assert {run.target_scope["ticker"] for run in runs} == {"005930", "000660"}
+    assert {run.status for run in runs} == {"succeeded"}
+
+
+def test_naver_ingestion_upserts_news_and_source_documents(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_search_news(self, *, ticker: str, company_name: str, display: int = 10):
+        return ExternalApiResult(
+            provider=NAVER_PROVIDER,
+            endpoint="/v1/search/news.json",
+            cache_key=f"news:{ticker}:{company_name}:{display}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "items": [
+                    {
+                        "title": "삼성전자 신규 공시 분석",
+                        "originallink": "https://news.example/articles/1",
+                        "link": "https://news.example/articles/1",
+                        "description": "테스트 뉴스",
+                        "pubDate": "Thu, 18 Jun 2026 09:00:00 +0900",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("app.services.ingestion.NaverNewsClient.search_news", fake_search_news)
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(NAVER_CLIENT_ID="id", NAVER_CLIENT_SECRET="secret"),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=NAVER_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+            news_display=1,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["result_counts"] == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
+
+    news_item = seeded_session.scalars(
+        select(NewsItem).where(NewsItem.source_url == "https://news.example/articles/1")
+    ).one()
+    assert news_item.provider == NAVER_PROVIDER
+    assert news_item.summary == "테스트 뉴스"
+
+    source_document = seeded_session.scalars(
+        select(SourceDocument).where(
+            SourceDocument.source_name == NAVER_PROVIDER,
+            SourceDocument.source_url == "https://news.example/articles/1",
+        )
+    ).one()
+    assert source_document.source_type == "news"
+
+
+def test_provider_fallback_marks_partial_failed_without_persisting_rows(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key="fallback",
+            data_status="fallback",
+            payload={"fallback": True, "list": []},
+            missing_data=[{"field": "OPENDART_API_KEY", "reason": "missing_api_key"}],
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY=""),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["results"][0]["status"] == "partial_failed"
+    assert result["results"][0]["result_counts"] == {
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 1,
+    }
+    assert result["results"][0]["error_summary"]["code"] == "provider_fallback"
+
+
+def test_persist_failure_rolls_back_normalized_rows_before_marking_failed(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key=f"disclosures:{ticker}:mock:{page_count}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "list": [
+                    {
+                        "rcept_no": "202606180001",
+                        "report_nm": "반기보고서",
+                        "rcept_dt": "20260618",
+                        "rm": "정기공시",
+                    },
+                    {
+                        "rcept_no": "202606180002",
+                        "report_nm": "정정공시",
+                        "rcept_dt": "20260618",
+                        "rm": "정정",
+                    },
+                ]
+            },
+        )
+
+    original_upsert = ingestion_module.upsert_source_document
+    calls = {"count": 0}
+
+    def failing_upsert(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("normalized_write_failed")
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    monkeypatch.setattr("app.services.ingestion.upsert_source_document", failing_upsert)
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY="test-key"),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["results"][0]["status"] == "failed"
+
+    run = seeded_session.scalars(
+        select(IngestionRun).where(
+            IngestionRun.run_id == build_run_id(
+                provider=OPENDART_PROVIDER,
+                source_date="2026-06-18",
+                ticker="005930",
+            )
+        )
+    ).one()
+    assert run.status == "failed"
+
+    leaked_source = seeded_session.scalars(
+        select(SourceDocument).where(
+            SourceDocument.source_name == OPENDART_PROVIDER,
+            SourceDocument.external_id.in_(["202606180001", "202606180002"]),
+        )
+    ).all()
+    leaked_disclosures = seeded_session.scalars(
+        select(Disclosure).where(
+            Disclosure.receipt_no.in_(["202606180001", "202606180002"])
+        )
+    ).all()
+    assert leaked_source == []
+    assert leaked_disclosures == []
+
+
+def test_handle_ingestion_event_raises_for_scheduled_failure(monkeypatch) -> None:
+    class FakeSessionFactory:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeProviderIngestionService:
+        def __init__(self, session):
+            self.session = session
+
+        def run_provider_batch(self, request):
+            return {
+                "ok": False,
+                "provider": request.provider,
+                "results": [{"status": "partial_failed"}],
+            }
+
+    monkeypatch.setattr("app.services.ingestion.get_session_factory", lambda: FakeSessionFactory())
+    monkeypatch.setattr(
+        "app.services.ingestion.ProviderIngestionService",
+        FakeProviderIngestionService,
+    )
+
+    with pytest.raises(RuntimeError, match="ingestion_batch_failed"):
+        handle_ingestion_event(
+            {
+                "stockbrief_operation": "ingest_provider_batch",
+                "provider": OPENDART_PROVIDER,
+                "tickers": ["005930"],
+                "raise_on_failure": True,
+            }
+        )
+
+
+def test_hydrate_external_api_settings_reads_external_secret(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.ingestion.load_secret_json",
+        lambda _secret_arn: {
+            "OPENDART_API_KEY": "opendart-secret",
+            "NAVER_CLIENT_ID": "naver-id",
+            "NAVER_CLIENT_SECRET": "naver-secret",
+        },
+    )
+
+    settings = hydrate_external_api_settings(
+        Settings(EXTERNAL_API_SECRET_ARN="arn:aws:secretsmanager:ap-northeast-2:123:secret:external")
+    )
+
+    assert settings.opendart_api_key == "opendart-secret"
+    assert settings.naver_client_id == "naver-id"
+    assert settings.naver_client_secret == "naver-secret"

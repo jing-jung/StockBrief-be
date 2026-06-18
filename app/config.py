@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     opendart_api_key: str = Field(default="", validation_alias="OPENDART_API_KEY")
     naver_client_id: str = Field(default="", validation_alias="NAVER_CLIENT_ID")
     naver_client_secret: str = Field(default="", validation_alias="NAVER_CLIENT_SECRET")
+    external_api_secret_arn: str = Field(default="", validation_alias="EXTERNAL_API_SECRET_ARN")
+    ingestion_raw_bucket: str = Field(default="", validation_alias="INGESTION_RAW_BUCKET")
     cognito_user_pool_id: str = Field(default="", validation_alias="COGNITO_USER_POOL_ID")
     cognito_app_client_id: str = Field(default="", validation_alias="COGNITO_APP_CLIENT_ID")
     cognito_issuer: str = Field(default="", validation_alias="COGNITO_ISSUER")

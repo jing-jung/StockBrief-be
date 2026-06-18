@@ -10,6 +10,7 @@ This directory prepares the MVP deployment direction for AWS. It is a skeleton, 
 - Secrets: AWS Secrets Manager.
 - Auth: AWS Cognito User Pool with email-based signup/login and API Gateway JWT authorizer.
 - Logs: CloudWatch log groups.
+- Ingestion: S3 raw provider archive, SQS DLQ, and optional EventBridge Scheduler.
 - Agent: optional Amazon Bedrock AgentCore Runtime CloudFormation stack, enabled after an ECR agent image exists.
 - IaC: Terraform modules with `dev`, `staging`, and `prod` variable examples.
 
@@ -31,6 +32,7 @@ infra/terraform
 │   ├── rds/
 │   └── secrets/
 ├── main.tf
+├── ingestion.tf
 ├── variables.tf
 ├── outputs.tf
 ├── providers.tf
@@ -75,12 +77,17 @@ repository variables required by `.github/workflows/backend-dev-deploy.yml`.
    - `lambda_security_group_ids`
    - `cors_allowed_origins`
    - `cognito_callback_urls`
-   - `cognito_logout_urls`
-   - `cognito_hosted_ui_domain_prefix`
-   - `amplify_cognito_redirect_uri`
+- `cognito_logout_urls`
+- `cognito_hosted_ui_domain_prefix`
+- `amplify_cognito_redirect_uri`
+- `enable_ingestion_scheduler`
+- `ingestion_schedule_provider`
+- `ingestion_schedule_tickers`
 
    For the first backend-only deployment, keep `enable_amplify = false`. Enable
    it only after the target GitHub organization approves the Amplify GitHub App.
+   Also keep `enable_ingestion_scheduler = false` until provider API credentials
+   are stored in Secrets Manager and the target ticker list is reviewed.
 
 4. If deploying Amplify through Terraform, install the AWS Amplify GitHub App for
    the target region/account and provide a GitHub personal access token through
@@ -249,6 +256,48 @@ Lambda receives:
 At runtime the backend uses `DATABASE_URL` directly when present in the secret.
 Otherwise, it builds a PostgreSQL URL from `DATABASE_HOST` plus the secret's
 `username` and `password`.
+
+## Provider Ingestion
+
+The backend Lambda can run provider ingestion through the same handler used for
+maintenance events:
+
+```json
+{
+  "stockbrief_operation": "ingest_provider_batch",
+  "provider": "OpenDART",
+  "tickers": ["005930"],
+  "source_date": "2026-06-18"
+}
+```
+
+Supported providers are `OpenDART` and `NAVER_NEWS`. Each ticker run writes an
+`ingestion_runs` row before provider access, computes a stable request hash, and
+skips duplicate successful runs as `replayed`. Available provider responses are
+stored in RDS using these first baseline upsert keys:
+
+- OpenDART disclosures: `provider + receipt_no`
+- NAVER news: `source_url`, with the source document keyed by `source_name + source_url_hash`
+- Source documents: `source_name + external_id`, fallback `content_hash`
+
+Terraform creates these ingestion resources:
+
+- S3 raw archive bucket when `enable_ingestion_raw_archive = true`
+- Customer-managed KMS key for S3 raw archive SSE-KMS encryption
+- SQS DLQ with SQS-managed server-side encryption for failed scheduled invocations
+- EventBridge Scheduler only when `enable_ingestion_scheduler = true` and
+  `ingestion_schedule_tickers` is non-empty
+
+The Lambda receives `INGESTION_RAW_BUCKET` and `EXTERNAL_API_SECRET_ARN`.
+External API secret values must be stored under:
+
+- `OPENDART_API_KEY`
+- `NAVER_CLIENT_ID`
+- `NAVER_CLIENT_SECRET`
+
+Keep the scheduler disabled for the first dev apply. Manually invoke
+`ingest_provider_batch` first, confirm `ingestion_runs`, normalized rows, S3 raw
+objects, and DLQ behavior, then enable the scheduler in a separate reviewed PR.
 
 ## AgentCore Runtime
 
