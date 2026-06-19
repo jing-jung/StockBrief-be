@@ -69,6 +69,27 @@ def test_terraform_readme_documents_multi_repository_layout() -> None:
     assert "services/api" not in terraform_readme
 
 
+def test_terraform_readme_documents_external_api_secret_update_runbook() -> None:
+    terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "### External API Credential Update Runbook" in terraform_readme
+    assert "terraform output -raw external_api_secret_arn" in terraform_readme
+    assert "/tmp/stockbrief-external-api-secret.json" in terraform_readme
+    assert "aws secretsmanager update-secret" in terraform_readme
+    assert "--secret-string file:///tmp/stockbrief-external-api-secret.json" in terraform_readme
+    assert "aws secretsmanager describe-secret" in terraform_readme
+    assert "Do not use `get-secret-value`" in terraform_readme
+    assert "aws lambda invoke" in terraform_readme
+    assert '"provider":"OpenDART"' in terraform_readme
+    assert '"provider":"NAVER_NEWS"' in terraform_readme
+    assert '"source_date":"YYYY-MM-DD"' in terraform_readme
+    assert "Replace `YYYY-MM-DD` with the business date you want to verify" in terraform_readme
+    assert "missing_api_key" in terraform_readme
+    assert "outbound internet egress" in terraform_readme
+
+
 def test_deployment_bootstrap_documents_dev_cost_pause_and_resume() -> None:
     deployment_doc = (
         REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
