@@ -1,0 +1,215 @@
+# Ingestion Operations Runbook
+
+This runbook describes how to manually verify StockBrief provider ingestion in
+the dev AWS account before enabling any scheduled ingestion. It assumes the
+backend Terraform stack already exists and the operator is authenticated with
+the `stockbrief-dev` AWS CLI profile.
+
+Do not paste API keys, Secrets Manager values, access tokens, or full provider
+payloads into PR comments, shared logs, or issue comments.
+
+## Preconditions
+
+- AWS account and region are confirmed:
+
+  ```bash
+  aws sts get-caller-identity --profile stockbrief-dev
+  aws configure get region --profile stockbrief-dev
+  ```
+
+- Terraform state points at the intended dev backend:
+
+  ```bash
+  cd infra/terraform
+  terraform init -reconfigure
+  terraform state list
+  terraform output api_base_url
+  terraform output ingestion_raw_bucket_name
+  terraform output ingestion_dlq_url
+  terraform output external_api_secret_arn
+  ```
+
+- `enable_ingestion_scheduler` remains `false`.
+- External API credentials are stored in Secrets Manager outside git.
+- Lambda has outbound internet egress for OpenDART and NAVER. An S3 Gateway
+  endpoint only covers raw archive writes to S3.
+- RDS is available and the latest migration has run:
+
+  ```bash
+  aws lambda invoke \
+    --function-name stockbrief-dev-api \
+    --payload '{"stockbrief_operation":"migrate"}' \
+    --cli-binary-format raw-in-base64-out \
+    /tmp/stockbrief-migrate-response.json \
+    --profile stockbrief-dev \
+    --region ap-northeast-2
+  ```
+
+## Manual Provider Smoke
+
+Use one ticker first. Replace `YYYY-MM-DD` with the business date you want to
+verify. Keep the response files in `/tmp` and summarize only the non-secret
+status fields in PR evidence.
+
+OpenDART:
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"OpenDART","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/stockbrief-opendart-ingest-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+NAVER news:
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"NAVER_NEWS","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/stockbrief-naver-ingest-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Expected result:
+
+- Lambda invoke status is `200`.
+- Response `ok` is `true`, or a provider-specific partial status is understood
+  and documented.
+- Missing credential errors such as `missing_api_key` are absent.
+- Re-running the same input returns a replayed or duplicate-safe result instead
+  of creating uncontrolled duplicate rows.
+
+## Database Verification
+
+Use a read-only SQL client or a temporary operator session. Do not write manual
+rows to production-like tables.
+
+Minimum checks:
+
+```sql
+select run_id, provider, status, source_date, result_counts, completed_at
+from ingestion_runs
+where provider in ('OpenDART', 'NAVER_NEWS')
+order by started_at desc
+limit 10;
+
+select ticker, source_name, source_type, external_id, created_at
+from source_documents
+where ticker = '005930'
+order by created_at desc
+limit 10;
+```
+
+Provider-specific checks:
+
+```sql
+select ticker, provider, receipt_no, disclosed_at, title
+from disclosures
+where ticker = '005930'
+order by disclosed_at desc nulls last, created_at desc
+limit 10;
+
+select ticker, source_name, title, published_at, source_url
+from news_items
+where ticker = '005930'
+order by published_at desc nulls last, created_at desc
+limit 10;
+```
+
+Expected result:
+
+- At least one `ingestion_runs` row exists for each manual provider run.
+- Successful rows end in `succeeded` or a documented `partial_failed` state.
+- Normalized rows reference source documents where applicable.
+- Raw provider payloads are referenced through metadata, not copied into PR
+  evidence.
+
+## Raw Archive Verification
+
+Confirm the raw archive bucket exists and new objects were written for the exact
+manual run. Do not inspect the bucket root because older objects can make a
+stale archive look current.
+
+```bash
+aws s3api list-objects-v2 \
+  --bucket "$(terraform output -raw ingestion_raw_bucket_name)" \
+  --prefix "raw/provider=OpenDART/ticker=005930/" \
+  --query "Contents[?contains(Key, 'run_id=')].[Key,LastModified,Size]" \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+If the Lambda response includes `raw_archive_uri`, verify the exact object key
+instead of relying on a prefix listing:
+
+```bash
+aws s3api head-object \
+  --bucket "$(terraform output -raw ingestion_raw_bucket_name)" \
+  --key "raw/provider=OpenDART/ticker=005930/run_id=REPLACE_WITH_RUN_ID.json" \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Repeat the same check with the `raw/provider=NAVER_NEWS/ticker=005930/` prefix
+or the exact `raw_archive_uri` returned by the NAVER manual run.
+
+Expected result:
+
+- New S3 objects exist under the provider/ticker prefix or the exact
+  `raw_archive_uri` key returned by the provider run.
+- Objects use the Terraform-managed raw archive bucket.
+- Object bodies are not copied into PR comments because they may include
+  provider payload details.
+
+## DLQ And CloudWatch Verification
+
+The DLQ should stay empty for manual smoke runs:
+
+```bash
+aws sqs get-queue-attributes \
+  --queue-url "$(terraform output -raw ingestion_dlq_url)" \
+  --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Check recent Lambda logs for ingestion errors without printing secret material:
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/stockbrief-dev-api \
+  --filter-pattern 'ingestion error failed missing_api_key timeout' \
+  --limit 20 \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Expected result:
+
+- `ApproximateNumberOfMessages` is `0`.
+- `ApproximateNumberOfMessagesNotVisible` is `0`.
+- CloudWatch logs do not contain API keys, client secrets, tokens, or database
+  passwords.
+- Any provider failure is captured as a provider or network issue, not as an
+  unhandled Lambda crash.
+
+## Scheduler Enable Gate
+
+Do not enable EventBridge Scheduler until all conditions are true:
+
+- Both OpenDART and NAVER manual smoke runs have completed with understood
+  results.
+- `ingestion_runs`, normalized provider tables, `source_documents`, S3 raw
+  archive, DLQ, and CloudWatch logs have been checked.
+- Provider rate limits, ticker count, and expected execution frequency have
+  been reviewed.
+- Lambda outbound internet egress is confirmed.
+- The scheduler change is reviewed in a separate PR.
+
+If any check fails, keep `enable_ingestion_scheduler = false`, record the
+blocking condition, and fix the smallest failing layer first.
