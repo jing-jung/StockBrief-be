@@ -138,6 +138,14 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
             source_date="2026-06-18",
         )
     )
+    replay_with_different_run_id = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+            run_id="manual-rerun",
+        )
+    )
 
     assert result["ok"] is True
     assert result["results"][0]["status"] == "succeeded"
@@ -147,6 +155,8 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
         "skipped": 0,
     }
     assert replay["results"][0]["status"] == "replayed"
+    assert replay_with_different_run_id["results"][0]["status"] == "replayed"
+    assert replay_with_different_run_id["results"][0]["run_id"] == "manual-rerun-005930"
     assert len(archiver.calls) == 1
 
     disclosure = seeded_session.scalars(

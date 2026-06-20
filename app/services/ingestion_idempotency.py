@@ -17,6 +17,7 @@ class IngestionIdempotencyService:
 
     SUCCEEDED_STATUS = "succeeded"
     RESTARTABLE_STATUSES = {"failed", "partial_failed"}
+    ACTIVE_STATUSES = {"started"}
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -75,6 +76,12 @@ class IngestionIdempotencyService:
             select(IngestionRun).where(IngestionRun.run_id == run_id).with_for_update()
         ).first()
         if existing is None:
+            duplicate_by_input = self._find_duplicate_by_input_hash(input_hash=input_hash)
+            if duplicate_by_input is not None:
+                if duplicate_by_input.status == self.SUCCEEDED_STATUS:
+                    return duplicate_by_input
+                if duplicate_by_input.status in self.ACTIVE_STATUSES:
+                    raise ValueError(f"ingestion_run_already_active:{duplicate_by_input.run_id}")
             try:
                 return self.start_run(
                     run_id=run_id,
@@ -85,13 +92,17 @@ class IngestionIdempotencyService:
                 )
             except IntegrityError:
                 self.session.rollback()
-                existing = self.session.scalars(
-                    select(IngestionRun)
-                    .where(IngestionRun.run_id == run_id)
-                    .with_for_update()
-                ).first()
+                existing = self._find_existing_after_integrity_error(
+                    run_id=run_id,
+                    input_hash=input_hash,
+                )
                 if existing is None:
                     raise
+                if existing.run_id != run_id:
+                    if existing.status == self.SUCCEEDED_STATUS:
+                        return existing
+                    if existing.status in self.ACTIVE_STATUSES:
+                        raise ValueError(f"ingestion_run_already_active:{existing.run_id}")
 
         if existing.status == self.SUCCEEDED_STATUS and existing.input_hash == input_hash:
             return existing
@@ -110,6 +121,30 @@ class IngestionIdempotencyService:
         self.session.commit()
         self.session.refresh(existing)
         return existing
+
+    def _find_duplicate_by_input_hash(self, *, input_hash: str) -> IngestionRun | None:
+        return self.session.scalars(
+            select(IngestionRun)
+            .where(
+                IngestionRun.input_hash == input_hash,
+                IngestionRun.status.in_([self.SUCCEEDED_STATUS, *self.ACTIVE_STATUSES]),
+            )
+            .order_by(IngestionRun.started_at.desc())
+            .with_for_update()
+        ).first()
+
+    def _find_existing_after_integrity_error(
+        self,
+        *,
+        run_id: str,
+        input_hash: str,
+    ) -> IngestionRun | None:
+        existing_by_run_id = self.session.scalars(
+            select(IngestionRun).where(IngestionRun.run_id == run_id).with_for_update()
+        ).first()
+        if existing_by_run_id is not None:
+            return existing_by_run_id
+        return self._find_duplicate_by_input_hash(input_hash=input_hash)
 
     def mark_failed_by_run_id(
         self,

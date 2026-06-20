@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -429,6 +430,13 @@ class IngestionRun(Base):
     __tablename__ = "ingestion_runs"
     __table_args__ = (
         UniqueConstraint("run_id", name="uq_ingestion_runs_run_id"),
+        Index(
+            "uq_ingestion_runs_active_input_hash",
+            "input_hash",
+            unique=True,
+            postgresql_where=text("status IN ('started', 'succeeded')"),
+            sqlite_where=text("status IN ('started', 'succeeded')"),
+        ),
         Index("ix_ingestion_runs_job_type_provider_status", "job_type", "provider", "status"),
         Index("ix_ingestion_runs_started_at", "started_at"),
     )

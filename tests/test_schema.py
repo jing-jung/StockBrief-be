@@ -89,13 +89,33 @@ def test_ingestion_runs_schema_is_declared() -> None:
 
     constraints = {constraint.name for constraint in IngestionRun.__table__.constraints}
     assert "uq_ingestion_runs_run_id" in constraints
+    indexes = {index.name for index in IngestionRun.__table__.indexes}
+    assert "uq_ingestion_runs_active_input_hash" in indexes
 
 
 def test_ingestion_runs_migration_creates_table() -> None:
     migration = (API_ROOT / "migrations/versions/0003_ingestion_runs.py").read_text()
+    input_hash_guard_migration = (
+        API_ROOT / "migrations/versions/0004_ingestion_input_hash_guard.py"
+    ).read_text()
+
     assert '"ingestion_runs"' in migration
     assert "uq_ingestion_runs_run_id" in migration
     assert "ix_ingestion_runs_job_type_provider_status" in migration
+    assert "uq_ingestion_runs_active_input_hash" in input_hash_guard_migration
+    assert "status IN ('started', 'succeeded')" in input_hash_guard_migration
+    assert "Cannot create uq_ingestion_runs_active_input_hash" in input_hash_guard_migration
+    assert "having count(*) > 1" in input_hash_guard_migration
+
+
+def test_db_schema_documents_input_hash_migration_precheck() -> None:
+    schema_doc = (API_ROOT / "docs/engineering/DB_SCHEMA.md").read_text()
+
+    assert "0004_ingestion_input_hash_guard" in schema_doc
+    assert "select input_hash, count(*) as duplicate_count" in schema_doc
+    assert "where status in ('started', 'succeeded')" in schema_doc
+    assert "having count(*) > 1" in schema_doc
+    assert "migration intentionally fails with an explicit message" in schema_doc
 
 
 def test_required_uniqueness_constraints_are_declared() -> None:
