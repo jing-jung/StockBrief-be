@@ -305,6 +305,15 @@ APIs still require `Resource: "*"` because the resource ARN is not known before
 creation or the AWS API does not support resource-level permissions for that
 operation.
 
+Terraform refresh also needs read permissions for every managed resource type.
+When ingestion raw archive or provider egress resources are enabled, the deploy
+role must be able to describe KMS keys, read S3 bucket public access/lifecycle
+configuration, read SQS queue attributes, and inspect NAT Gateway/EIP/route
+table state before it can safely plan. Terraform apply and rollback paths for
+the raw archive must also be able to remove S3 bucket public access block,
+encryption, and lifecycle configuration when those managed resources are
+disabled or destroyed.
+
 After changing Terraform-managed service permissions, re-run:
 
 ```bash

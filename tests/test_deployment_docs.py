@@ -138,3 +138,29 @@ def test_deployment_bootstrap_documents_dev_cost_pause_and_resume() -> None:
     assert "terraform plan -var-file=envs/dev/deploy.auto.tfvars.json" in deployment_doc
     assert "Do not delete Terraform-managed resources from the AWS console" in deployment_doc
     assert "Do not use `terraform apply` as a blind repair step" in deployment_doc
+
+
+def test_github_deploy_role_policy_can_refresh_ingestion_and_nat_resources() -> None:
+    bootstrap_script = (REPOSITORY_ROOT / "scripts/bootstrap_github_oidc.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for action in [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetLifecycleConfiguration",
+        "s3:DeleteBucketPublicAccessBlock",
+        "s3:DeleteBucketEncryption",
+        "s3:DeleteLifecycleConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketOwnershipControls",
+        "sqs:GetQueueAttributes",
+        "ec2:CreateNatGateway",
+        "ec2:DescribeNatGateways",
+        "ec2:AllocateAddress",
+        "ec2:CreateRouteTable",
+        "ec2:AssociateRouteTable",
+    ]:
+        assert action in bootstrap_script
