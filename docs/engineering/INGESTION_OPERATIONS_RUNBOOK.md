@@ -146,9 +146,31 @@ Expected result:
 
 ## Raw Archive Verification
 
-Confirm the raw archive bucket exists and new objects were written for the exact
-manual run. Do not inspect the bucket root because older objects can make a
-stale archive look current.
+Before provider credentials and outbound internet egress are ready, verify that
+the deployed Lambda can write a small raw archive probe through its S3 path:
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"stockbrief_operation":"check_raw_archive_write"}' \
+  /tmp/stockbrief-raw-archive-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Expected result:
+
+- The response has `ok=true`.
+- `checks.raw_archive.write_verified` is `true`.
+- `checks.raw_archive.raw_archive_uri` points at the Terraform-managed raw
+  archive bucket.
+- The probe payload is intentionally small and does not include provider data or
+  secrets. Do not copy object bodies into PR comments.
+
+After a manual provider run, confirm the raw archive bucket exists and new
+objects were written for the exact manual run. Do not inspect the bucket root
+because older objects can make a stale archive look current.
 
 ```bash
 aws s3api list-objects-v2 \

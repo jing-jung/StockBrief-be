@@ -19,6 +19,7 @@ from app.services.ingestion import (
     ProviderIngestionService,
     build_request_hash,
     build_run_id,
+    check_raw_archive_write,
     hydrate_external_api_settings,
     handle_ingestion_event,
 )
@@ -45,6 +46,18 @@ class RecordingArchiver:
             }
         )
         return f"s3://stockbrief-dev-raw/{provider}/{ticker}/{run_id}.json"
+
+
+class FailingArchiver:
+    def archive(
+        self,
+        *,
+        run_id: str,
+        provider: str,
+        ticker: str,
+        payload: dict[str, Any],
+    ) -> str | None:
+        raise RuntimeError("s3 endpoint unavailable with secret-like token")
 
 
 def test_build_request_hash_uses_provider_ticker_source_date_and_request_params() -> None:
@@ -652,6 +665,60 @@ def test_check_ingestion_readiness_returns_secret_load_error(monkeypatch) -> Non
     assert {"code": "external_api_secret_load_failed", "field": "EXTERNAL_API_SECRET_ARN"} in result[
         "issues"
     ]
+
+
+def test_check_raw_archive_write_reports_missing_bucket_configuration() -> None:
+    result = check_raw_archive_write(Settings())
+
+    assert result == {
+        "ok": False,
+        "checks": {"raw_archive": {"configured": False, "write_verified": False}},
+        "issues": [{"code": "missing_ingestion_raw_bucket", "field": "INGESTION_RAW_BUCKET"}],
+    }
+
+
+def test_check_raw_archive_write_archives_small_probe_without_secret_values() -> None:
+    archiver = RecordingArchiver()
+
+    result = check_raw_archive_write(
+        Settings(INGESTION_RAW_BUCKET="stockbrief-dev-raw"),
+        archiver=archiver,
+    )
+
+    assert result["ok"] is True
+    assert result["issues"] == []
+    assert result["checks"]["raw_archive"]["configured"] is True
+    assert result["checks"]["raw_archive"]["bucket"] == "stockbrief-dev-raw"
+    assert result["checks"]["raw_archive"]["write_verified"] is True
+    assert result["checks"]["raw_archive"]["raw_archive_uri"].startswith(
+        "s3://stockbrief-dev-raw/STOCKBRIEF_PROBE/healthcheck/raw-archive-probe-"
+    )
+    assert len(archiver.calls) == 1
+    assert archiver.calls[0]["provider"] == "STOCKBRIEF_PROBE"
+    assert archiver.calls[0]["ticker"] == "healthcheck"
+    assert archiver.calls[0]["payload"]["probe"] == "stockbrief-ingestion-raw-archive"
+    assert "secret" not in str(result).lower()
+
+
+def test_check_raw_archive_write_returns_error_code_without_exception_message() -> None:
+    result = check_raw_archive_write(
+        Settings(INGESTION_RAW_BUCKET="stockbrief-dev-raw"),
+        archiver=FailingArchiver(),
+    )
+
+    assert result == {
+        "ok": False,
+        "checks": {
+            "raw_archive": {
+                "configured": True,
+                "bucket": "stockbrief-dev-raw",
+                "write_verified": False,
+                "error_code": "RuntimeError",
+            }
+        },
+        "issues": [{"code": "raw_archive_write_failed", "field": "INGESTION_RAW_BUCKET"}],
+    }
+    assert "secret-like token" not in str(result)
 
 
 def test_check_provider_egress_reports_reachable_provider_endpoints() -> None:

@@ -42,6 +42,8 @@ def test_ingestion_operations_runbook_covers_storage_dlq_and_logs() -> None:
     assert "from disclosures" in runbook
     assert "from news_items" in runbook
     assert "aws s3api list-objects-v2" in runbook
+    assert '"stockbrief_operation":"check_raw_archive_write"' in runbook
+    assert "checks.raw_archive.write_verified" in runbook
     assert '--prefix "raw/provider=OpenDART/ticker=005930/"' in runbook
     assert "raw/provider=NAVER_NEWS/ticker=005930/" in runbook
     assert "raw_archive_uri" in runbook

@@ -23,6 +23,7 @@ def test_maintenance_rejects_unknown_operation() -> None:
     assert result["ok"] is False
     assert result["error"] == "unsupported_operation"
     assert "check_ingestion_readiness" in result["supported_operations"]
+    assert "check_raw_archive_write" in result["supported_operations"]
     assert "check_provider_egress" in result["supported_operations"]
     assert "ingest_provider_batch" in result["supported_operations"]
 
@@ -36,6 +37,17 @@ def test_maintenance_routes_ingestion_readiness_operation(monkeypatch) -> None:
     result = handle_maintenance_event({"stockbrief_operation": "check_ingestion_readiness"})
 
     assert result == {"ok": False, "issues": [{"code": "missing_provider_credential"}]}
+
+
+def test_maintenance_routes_raw_archive_write_operation(monkeypatch) -> None:
+    def fake_check():
+        return {"ok": True, "checks": {"raw_archive": {"write_verified": True}}}
+
+    monkeypatch.setattr("app.maintenance.check_raw_archive_write", fake_check)
+
+    result = handle_maintenance_event({"stockbrief_operation": "check_raw_archive_write"})
+
+    assert result == {"ok": True, "checks": {"raw_archive": {"write_verified": True}}}
 
 
 def test_maintenance_routes_provider_egress_operation(monkeypatch) -> None:

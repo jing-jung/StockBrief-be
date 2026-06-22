@@ -8,6 +8,7 @@ from app.seed.seed_mock_data import seed_mock_data
 from app.services.ingestion import (
     check_ingestion_readiness,
     check_provider_egress,
+    check_raw_archive_write,
     handle_ingestion_event,
 )
 
@@ -22,6 +23,8 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         return seed()
     if operation == "check_ingestion_readiness":
         return check_ingestion_readiness()
+    if operation == "check_raw_archive_write":
+        return check_raw_archive_write()
     if operation == "check_provider_egress":
         return check_provider_egress(event)
     if operation == "ingest_provider_batch":
@@ -34,6 +37,7 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
             "seed_mock_data",
             "migrate_and_seed",
             "check_ingestion_readiness",
+            "check_raw_archive_write",
             "check_provider_egress",
             "ingest_provider_batch",
         ],

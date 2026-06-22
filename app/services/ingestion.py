@@ -36,6 +36,8 @@ PROVIDER_EGRESS_ENDPOINTS = {
     NAVER_PROVIDER: "https://openapi.naver.com/v1/search/news.json",
 }
 PROVIDER_EGRESS_TIMEOUT_SECONDS = 3.0
+RAW_ARCHIVE_PROBE_PROVIDER = "STOCKBRIEF_PROBE"
+RAW_ARCHIVE_PROBE_TICKER = "healthcheck"
 
 
 class PayloadArchiver(Protocol):
@@ -542,6 +544,64 @@ def check_ingestion_readiness(settings: Settings | None = None) -> dict[str, Any
             },
         },
         "issues": issues,
+    }
+
+
+def check_raw_archive_write(
+    settings: Settings | None = None,
+    *,
+    archiver: PayloadArchiver | None = None,
+) -> dict[str, Any]:
+    base_settings = settings or get_settings()
+    if not base_settings.ingestion_raw_bucket:
+        return {
+            "ok": False,
+            "checks": {"raw_archive": {"configured": False, "write_verified": False}},
+            "issues": [{"code": "missing_ingestion_raw_bucket", "field": "INGESTION_RAW_BUCKET"}],
+        }
+
+    probe_created_at = datetime.now(timezone.utc)
+    probe_run_id = f"raw-archive-probe-{probe_created_at.strftime('%Y%m%dT%H%M%SZ')}"
+    probe_payload = {
+        "probe": "stockbrief-ingestion-raw-archive",
+        "created_at": probe_created_at.isoformat(),
+    }
+    archive_writer = archiver or S3PayloadArchiver(bucket=base_settings.ingestion_raw_bucket)
+
+    try:
+        raw_archive_uri = archive_writer.archive(
+            run_id=probe_run_id,
+            provider=RAW_ARCHIVE_PROBE_PROVIDER,
+            ticker=RAW_ARCHIVE_PROBE_TICKER,
+            payload=probe_payload,
+        )
+        if raw_archive_uri is None:
+            raise RuntimeError("raw archive probe did not return a URI")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "checks": {
+                "raw_archive": {
+                    "configured": True,
+                    "bucket": base_settings.ingestion_raw_bucket,
+                    "write_verified": False,
+                    "error_code": exc.__class__.__name__,
+                }
+            },
+            "issues": [{"code": "raw_archive_write_failed", "field": "INGESTION_RAW_BUCKET"}],
+        }
+
+    return {
+        "ok": True,
+        "checks": {
+            "raw_archive": {
+                "configured": True,
+                "bucket": base_settings.ingestion_raw_bucket,
+                "write_verified": True,
+                "raw_archive_uri": raw_archive_uri,
+            }
+        },
+        "issues": [],
     }
 
 
