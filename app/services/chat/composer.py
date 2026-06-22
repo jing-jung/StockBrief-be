@@ -176,6 +176,7 @@ def _citations(
             title=item.title,
             source_name=item.source_name,
             source_url=item.source_url,
+            published_at=item.published_at,
             as_of_date=item.as_of_date,
         )
         for item in selected[:4]

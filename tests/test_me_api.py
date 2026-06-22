@@ -417,5 +417,21 @@ def test_authenticated_chat_persists_session_and_messages(seeded_session: Sessio
             select(ChatMessage).where(ChatMessage.session_id == payload["data"]["session_id"])
         ).all()
         assert [message.role for message in messages] == ["user", "assistant"]
+        assistant_message = next(message for message in messages if message.role == "assistant")
+        assert {"evidence_id", "type", "title", "source_url", "published_at"}.issubset(
+            assistant_message.citations[0]
+        )
+        assert any(citation["published_at"] for citation in assistant_message.citations)
+        assert all(
+            isinstance(citation["published_at"], str)
+            for citation in assistant_message.citations
+            if citation["published_at"] is not None
+        )
+        assert any(citation["published_at"] for citation in payload["data"]["citations"])
+        assert all(
+            isinstance(citation["published_at"], str)
+            for citation in payload["data"]["citations"]
+            if citation["published_at"] is not None
+        )
     finally:
         app.dependency_overrides.clear()

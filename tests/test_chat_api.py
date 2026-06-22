@@ -50,6 +50,7 @@ def test_chat_allowed_answer_uses_candidate_evidence_and_risks(
     assert {"id", "source_type", "title", "url", "published_at"}.issubset(
         data["citations"][0]
     )
+    assert any(citation["published_at"] for citation in data["citations"])
 
 
 def test_chat_redirects_trade_decision_request(seeded_api_client: TestClient) -> None:

@@ -348,6 +348,7 @@ class ChatCitation(BaseModel):
     title: str
     source_name: str
     source_url: str | None = None
+    published_at: datetime | None = None
     as_of_date: date | None = None
 
 

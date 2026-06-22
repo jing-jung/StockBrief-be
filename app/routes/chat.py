@@ -72,7 +72,7 @@ def _chat_contract_data(
                 source_type=contract_source_type(citation.type),
                 title=citation.title,
                 url=citation.source_url,
-                published_at=None,
+                published_at=citation.published_at,
             )
             for citation in response.citations
         ],
