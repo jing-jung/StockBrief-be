@@ -154,7 +154,8 @@ class ProviderIngestionService:
                 "error": "unsupported_provider",
                 "supported_providers": list(SUPPORTED_PROVIDERS),
             }
-        if not request.tickers:
+        tickers = _unique_tickers(request.tickers)
+        if not tickers:
             return {"ok": False, "error": "tickers_required"}
         limit_violations = _request_limit_violations(request)
         if limit_violations:
@@ -165,7 +166,7 @@ class ProviderIngestionService:
                 "limits": _request_limits(),
             }
 
-        results = [self._run_ticker(request=request, ticker=ticker) for ticker in request.tickers]
+        results = [self._run_ticker(request=request, ticker=ticker) for ticker in tickers]
         failed = [item for item in results if item.status in {"failed", "partial_failed"}]
         return {
             "ok": not failed,
@@ -780,6 +781,17 @@ def _iter_dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _unique_tickers(tickers: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for ticker in tickers:
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+        unique.append(ticker)
+    return unique
 
 
 def _parse_yyyymmdd(value: Any) -> datetime | None:

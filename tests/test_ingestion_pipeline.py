@@ -238,7 +238,10 @@ def test_explicit_run_id_is_scoped_per_ticker_in_batch(
     monkeypatch,
     seeded_session: Session,
 ) -> None:
+    provider_calls: list[str] = []
+
     def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+        provider_calls.append(ticker)
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
             endpoint="/list.json",
@@ -270,7 +273,7 @@ def test_explicit_run_id_is_scoped_per_ticker_in_batch(
     result = service.run_provider_batch(
         ProviderIngestionRequest(
             provider=OPENDART_PROVIDER,
-            tickers=["005930", "000660"],
+            tickers=["005930", "005930", "000660"],
             source_date="2026-06-18",
             run_id="manual-run",
         )
@@ -281,6 +284,7 @@ def test_explicit_run_id_is_scoped_per_ticker_in_batch(
         "manual-run-005930",
         "manual-run-000660",
     ]
+    assert provider_calls == ["005930", "000660"]
 
     runs = seeded_session.scalars(
         select(IngestionRun)
@@ -288,8 +292,30 @@ def test_explicit_run_id_is_scoped_per_ticker_in_batch(
         .order_by(IngestionRun.run_id)
     ).all()
     assert len(runs) == 2
-    assert {run.target_scope["ticker"] for run in runs} == {"005930", "000660"}
+    runs_by_ticker = {run.target_scope["ticker"]: run for run in runs}
+    assert set(runs_by_ticker) == {"005930", "000660"}
     assert {run.status for run in runs} == {"succeeded"}
+    assert runs_by_ticker["005930"].run_id == "manual-run-005930"
+    assert runs_by_ticker["000660"].run_id == "manual-run-000660"
+    assert runs_by_ticker["005930"].target_scope == {
+        "ticker": "005930",
+        "source_date": "2026-06-18",
+    }
+    assert runs_by_ticker["000660"].target_scope == {
+        "ticker": "000660",
+        "source_date": "2026-06-18",
+    }
+    assert runs_by_ticker["005930"].input_hash != runs_by_ticker["000660"].input_hash
+    assert runs_by_ticker["005930"].result_counts == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
+    assert runs_by_ticker["000660"].result_counts == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
 
 
 def test_naver_ingestion_upserts_news_and_source_documents(
