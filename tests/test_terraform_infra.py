@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -179,6 +180,31 @@ def test_lambda_nat_egress_is_toggleable_and_disabled_by_default() -> None:
     assert "`lambda_nat_public_subnet_id` in `lambda_nat_route_subnet_ids`" in terraform_readme
     assert "turn it off after the evidence is collected" in terraform_readme
     assert "remove the NAT Gateway and EIP" in deployment_doc
+
+
+def test_dev_live_provider_nat_egress_uses_non_overlapping_subnets() -> None:
+    deploy_tfvars = json.loads(_read("envs/dev/deploy.auto.tfvars.json"))
+    terraform_readme = _read("README.md")
+    runbook = (REPOSITORY_ROOT / "docs/engineering/INGESTION_OPERATIONS_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    nat_enabled = deploy_tfvars.get("enable_lambda_nat_egress", False)
+    nat_public_subnet_id = deploy_tfvars.get("lambda_nat_public_subnet_id", "")
+    nat_route_subnet_ids = deploy_tfvars.get("lambda_nat_route_subnet_ids", [])
+
+    if nat_enabled:
+        assert nat_public_subnet_id
+        assert nat_route_subnet_ids
+        assert nat_public_subnet_id not in nat_route_subnet_ids
+    else:
+        assert nat_public_subnet_id == ""
+        assert nat_route_subnet_ids == []
+
+    assert "enable_lambda_nat_egress" in terraform_readme
+    assert "lambda_nat_public_subnet_id" in terraform_readme
+    assert "lambda_nat_route_subnet_ids" in terraform_readme
+    assert "The NAT public subnet must" in runbook
 
 
 def test_secret_versions_do_not_reclaim_manually_rotated_current_values() -> None:
