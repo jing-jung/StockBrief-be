@@ -8,7 +8,17 @@ from sqlalchemy.orm import Session
 from app.orm import ExternalApiCallLog
 
 
-SENSITIVE_KEYS = ("key", "secret", "token", "password", "crtfc_key", "client_secret")
+SENSITIVE_KEYS = (
+    "key",
+    "secret",
+    "token",
+    "password",
+    "authorization",
+    "client-id",
+    "client_id",
+    "crtfc_key",
+    "client_secret",
+)
 
 
 class ExternalApiCallLogger:
@@ -47,5 +57,13 @@ def _sanitize(value: dict[str, Any]) -> dict[str, Any]:
         if any(sensitive in key.casefold() for sensitive in SENSITIVE_KEYS):
             sanitized[key] = "[REDACTED]"
         else:
-            sanitized[key] = item
+            sanitized[key] = _sanitize_value(item)
     return sanitized
+
+
+def _sanitize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _sanitize(value)
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    return value
