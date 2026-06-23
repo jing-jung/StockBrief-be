@@ -47,6 +47,8 @@ find "${BUILD_DIR}" -exec touch -t 198001010000 {} +
 
 (
   cd "${BUILD_DIR}"
+  # Deterministic Lambda packages include regular files only. Directory entries
+  # and symlinks are intentionally excluded unless the packaging policy changes.
   find . -type f | LC_ALL=C sort | zip -X -q "${ZIP_PATH}" -@
 )
 

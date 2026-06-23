@@ -55,7 +55,7 @@ repository variables required by `.github/workflows/backend-dev-deploy.yml`.
    ./scripts/package_api_lambda.sh
    ```
 
-   The script defaults `PYTHON_BIN` to `python3.13` to match `requires-python = ">=3.13"` in `pyproject.toml` and the `python3.13` Lambda runtime. It packages third-party dependencies as Linux `manylinux2014_x86_64` wheels for the Lambda zip, then copies the backend `app/` package into the zip root. If your system resolves a different interpreter as `python3.13`, override the variable explicitly:
+   The script defaults `PYTHON_BIN` to `python3.13` to match `requires-python = ">=3.13"` in `pyproject.toml` and the `python3.13` Lambda runtime. It packages third-party dependencies as Linux `manylinux2014_x86_64` wheels for the Lambda zip, then copies the backend `app/` package into the zip root. The zip is deterministic and includes regular files only; directory entries and symlinks are excluded by policy so Lambda packages do not depend on filesystem link behavior. If your system resolves a different interpreter as `python3.13`, override the variable explicitly:
 
    ```bash
    PYTHON_BIN=/usr/local/bin/python3.13 ./scripts/package_api_lambda.sh
@@ -192,7 +192,7 @@ Output zip:
 dist/stockbrief-api-lambda.zip
 ```
 
-The script installs Lambda-compatible third-party dependencies into `dist/lambda-api`, copies the backend `app/` package into the zip root, removes Python cache directories, and zips the package. It does not include local `.env` files or secrets.
+The script installs Lambda-compatible third-party dependencies into `dist/lambda-api`, copies the backend `app/` package into the zip root, removes Python cache directories, normalizes timestamps, and zips regular files in sorted order with `zip -X`. It intentionally omits directory entries and symlinks. It does not include local `.env` files or secrets.
 
 ## Amplify Hosting
 
@@ -510,9 +510,11 @@ tokens, or copied secret payloads.
    The script resolves `external_api_secret_arn` from Terraform output by
    default, writes a temporary JSON payload outside git, passes it to
    `aws secretsmanager update-secret` with `file://`, and deletes the temporary
-   payload automatically. The script also passes `--profile` and `--region` to
-   both Terraform state lookup and AWS Secrets Manager calls; use `--secret-id`
-   to skip Terraform state lookup entirely when needed.
+   payload automatically. The script applies the selected profile and region to
+   Terraform state lookup through `AWS_PROFILE`, `AWS_REGION`, and
+   `AWS_DEFAULT_REGION`, and passes `--profile`/`--region` to AWS Secrets
+   Manager calls. Use `--secret-id` to skip Terraform state lookup entirely when
+   needed.
 
 5. Verify metadata only. Do not use `get-secret-value` in shared logs or PR
    evidence because it prints secret material. The script prints this metadata

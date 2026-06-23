@@ -28,6 +28,9 @@ jobs:
       - name: Verify repository contract files
         run: test -f .env.example
 
+      - name: Check Lambda packaging script syntax
+        run: bash -n scripts/package_api_lambda.sh
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
@@ -38,6 +41,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+
+      - name: Verify deterministic Lambda package
+        run: |
+          ./scripts/package_api_lambda.sh
+          first_hash="$(sha256sum dist/stockbrief-api-lambda.zip | awk '{print $1}')"
+          ./scripts/package_api_lambda.sh
+          second_hash="$(sha256sum dist/stockbrief-api-lambda.zip | awk '{print $1}')"
+          test "$first_hash" = "$second_hash"
 
       - name: Run tests
         run: pytest

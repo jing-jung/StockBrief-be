@@ -49,7 +49,24 @@ def test_lambda_packaging_script_targets_backend_repository_root() -> None:
     assert '--platform "${LAMBDA_PLATFORM}"' in script
     assert "--only-binary=:all:" in script
     assert 'cp -R "${API_DIR}/app" "${BUILD_DIR}/app"' in script
+    assert "Deterministic Lambda packages include regular files only" in script
+    assert "symlinks are intentionally excluded" in script
+    assert "find . -type f | LC_ALL=C sort | zip -X" in script
     assert "services/api" not in script
+
+
+def test_backend_ci_checks_lambda_packaging_script_on_pr() -> None:
+    workflow = (REPOSITORY_ROOT / ".github/workflows/backend-ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "pull_request:" in workflow
+    assert "Check Lambda packaging script syntax" in workflow
+    assert "bash -n scripts/package_api_lambda.sh" in workflow
+    assert "Verify deterministic Lambda package" in workflow
+    assert "./scripts/package_api_lambda.sh" in workflow
+    assert "sha256sum dist/stockbrief-api-lambda.zip" in workflow
+    assert 'test "$first_hash" = "$second_hash"' in workflow
 
 
 def test_external_api_secret_update_script_handles_secret_payload_safely() -> None:
@@ -156,6 +173,9 @@ def test_terraform_readme_documents_external_api_secret_update_runbook() -> None
     assert "terraform output -raw external_api_secret_arn" in terraform_readme
     assert "scripts/update_external_api_secret.sh --prompt --dry-run" in terraform_readme
     assert "scripts/update_external_api_secret.sh --prompt" in terraform_readme
+    assert "through `AWS_PROFILE`, `AWS_REGION`, and" in terraform_readme
+    assert "`AWS_DEFAULT_REGION`" in terraform_readme
+    assert "passes `--profile`/`--region` to AWS Secrets" in terraform_readme
     assert "`--secret-id`" in terraform_readme
     assert "skip Terraform state lookup" in terraform_readme
     assert "aws secretsmanager update-secret" in terraform_readme
