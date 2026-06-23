@@ -1,6 +1,8 @@
+import logging
 from collections.abc import Mapping
 from typing import Any
 
+from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -88,6 +90,52 @@ def test_chat_bedrock_provider_fails_closed_when_model_is_missing(
     assert payload["success"] is False
     assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
     assert "BEDROCK_CHAT_MODEL_ID" in payload["error"]["message"]
+
+
+def test_chat_bedrock_provider_logs_runtime_request_failure_reason(
+    seeded_api_client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "AccessDeniedException",
+                        "Message": "model access denied",
+                    }
+                },
+                "Converse",
+            )
+
+    def override_settings() -> Settings:
+        return Settings(
+            chat_provider="bedrock",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
+            bedrock_chat_region="ap-northeast-2",
+        )
+
+    monkeypatch.setattr(
+        "app.services.chat.providers.boto3.client",
+        lambda *args, **kwargs: FakeBedrockClient(),
+    )
+    app.dependency_overrides[get_settings] = override_settings
+    caplog.set_level(logging.WARNING, logger="app.services.chat.providers")
+    try:
+        response = seeded_api_client.post(
+            "/v1/chat",
+            json={"ticker": "005930", "message": "왜 추천됐나요?"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
+    assert "request failed" in payload["error"]["message"]
+    assert "reason=runtime_request_failed" in caplog.text
+    assert "error_type=ClientError" in caplog.text
 
 
 def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
@@ -238,6 +286,101 @@ def test_chat_bedrock_provider_requires_model_citation_when_evidence_exists(
     payload = response.json()
     assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
     assert "without evidence citations" in payload["error"]["message"]
+
+
+def test_chat_bedrock_provider_logs_likely_false_positive_guard_without_raw_answer(
+    seeded_api_client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    raw_model_answer = (
+        "삼성전자(005930)는 공개 데이터 기준 검토 대상입니다. "
+        "매수 권유가 아닙니다. "  # policy-scan: allow model-output-guard-test
+        "[ev_mock_005930_disclosure] 근거를 확인하세요."
+    )
+
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": raw_model_answer,
+                            }
+                        ]
+                    }
+                }
+            }
+
+    def override_settings() -> Settings:
+        return Settings(
+            chat_provider="bedrock",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
+            bedrock_chat_region="ap-northeast-2",
+        )
+
+    monkeypatch.setattr(
+        "app.services.chat.providers.boto3.client",
+        lambda *args, **kwargs: FakeBedrockClient(),
+    )
+    app.dependency_overrides[get_settings] = override_settings
+    caplog.set_level(logging.WARNING, logger="app.services.chat.providers")
+    try:
+        response = seeded_api_client.post(
+            "/v1/chat",
+            json={"ticker": "005930", "message": "왜 추천됐나요?"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
+    assert "unsafe answer" in payload["error"]["message"]
+    assert "reason=unsafe_output" in caplog.text
+    assert "likely_false_positive=True" in caplog.text
+    assert "matched_terms=매수" in caplog.text
+    assert raw_model_answer not in caplog.text
+    assert "매수 권유가 아닙니다" not in caplog.text
+
+
+def test_chat_bedrock_provider_logs_empty_answer_guard_reason(
+    seeded_api_client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
+            return {"output": {"message": {"content": [{"text": "   "}]}}}
+
+    def override_settings() -> Settings:
+        return Settings(
+            chat_provider="bedrock",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
+            bedrock_chat_region="ap-northeast-2",
+        )
+
+    monkeypatch.setattr(
+        "app.services.chat.providers.boto3.client",
+        lambda *args, **kwargs: FakeBedrockClient(),
+    )
+    app.dependency_overrides[get_settings] = override_settings
+    caplog.set_level(logging.WARNING, logger="app.services.chat.providers")
+    try:
+        response = seeded_api_client.post(
+            "/v1/chat",
+            json={"ticker": "005930", "message": "왜 추천됐나요?"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
+    assert "empty answer" in payload["error"]["message"]
+    assert "reason=empty_answer" in caplog.text
+    assert "answer_length=0" in caplog.text
 
 
 def test_chat_bedrock_provider_keeps_policy_redirect_deterministic(

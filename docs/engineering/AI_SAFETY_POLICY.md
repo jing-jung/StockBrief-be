@@ -158,6 +158,11 @@ Provider configuration:
 - Do not silently fall back from Bedrock to mock in production-like validation.
   A Bedrock provider failure should be visible as an upstream provider error so
   operators can distinguish model/runtime issues from deterministic mock output.
+- Bedrock fail-closed logs must distinguish runtime request failures, empty
+  answers, unsafe output, and citation guard failures. Unsafe output logs must
+  not include the raw model answer; use answer length, a short SHA-256 prefix,
+  matched guard terms, and the `likely_false_positive` flag for operations
+  triage.
 
 ## 8. Safety Validation Checklist
 

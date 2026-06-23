@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -29,6 +30,10 @@ PROHIBITED_MODEL_OUTPUT_TERMS = (
     "수익 보장",  # policy-scan: allow model-output-guard
 )
 EVIDENCE_ID_REFERENCE_PATTERN = re.compile(r"\[([A-Za-z0-9][A-Za-z0-9_.:-]{2,})\]")
+LIKELY_FALSE_POSITIVE_PATTERNS = (
+    re.compile(r"(매수|매도)\s*(권유|추천|조언|의견)\s*(?:가|은|는)?\s*아닙니다"),
+    re.compile(r"(목표가|진입가|손절가)\s*(?:를|은|는)?\s*(제시|제공|산정)\s*하지\s*않"),  # policy-scan: allow model-output-guard
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,16 @@ class ChatProviderInput:
     message: str
     candidate: RecommendationCandidateResponse
     evidence: list[StockEvidenceItemResponse]
+
+
+@dataclass(frozen=True)
+class OutputGuardResult:
+    matched_terms: tuple[str, ...]
+    likely_false_positive: bool = False
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.matched_terms)
 
 
 class ChatProviderUnavailable(RuntimeError):
@@ -132,7 +147,7 @@ class BedrockChatProvider:
             )
         except (BotoCoreError, ClientError) as exc:
             logger.warning(
-                "bedrock_chat_provider_request_failed model_id=%s region_name=%s error_type=%s error_message=%s",
+                "bedrock_chat_provider_fail_closed reason=runtime_request_failed model_id=%s region_name=%s error_type=%s error_message=%s",
                 self.model_id,
                 self.region_name,
                 type(exc).__name__,
@@ -144,15 +159,39 @@ class BedrockChatProvider:
 
         answer = _extract_bedrock_text(response)
         if not answer:
+            _log_bedrock_guard_failure(
+                reason="empty_answer",
+                model_id=self.model_id,
+                region_name=self.region_name,
+                answer="",
+            )
             raise ChatProviderUnavailable("Bedrock chat provider returned an empty answer.")
-        if _contains_prohibited_output(answer):
+        guard_result = _evaluate_prohibited_output(answer)
+        if guard_result.blocked:
+            _log_bedrock_guard_failure(
+                reason="unsafe_output",
+                model_id=self.model_id,
+                region_name=self.region_name,
+                answer=answer,
+                guard_result=guard_result,
+            )
             raise ChatProviderUnavailable(
                 "Bedrock chat provider returned an unsafe answer."
             )
-        _validate_answer_citations(
-            answer=answer,
-            allowed_evidence_ids=set(baseline.used_evidence_ids),
-        )
+        try:
+            _validate_answer_citations(
+                answer=answer,
+                allowed_evidence_ids=set(baseline.used_evidence_ids),
+            )
+        except ChatProviderUnavailable as exc:
+            _log_bedrock_guard_failure(
+                reason="citation_guard_failed",
+                model_id=self.model_id,
+                region_name=self.region_name,
+                answer=answer,
+                details=str(exc),
+            )
+            raise
 
         return ChatResponse(
             answer=answer,
@@ -245,9 +284,43 @@ def _extract_bedrock_text(response: dict[str, Any]) -> str:
     return "\n".join(part.strip() for part in text_parts if part.strip()).strip()
 
 
-def _contains_prohibited_output(value: str) -> bool:
+def _evaluate_prohibited_output(value: str) -> OutputGuardResult:
     normalized = value.casefold()
-    return any(term.casefold() in normalized for term in PROHIBITED_MODEL_OUTPUT_TERMS)
+    matched_terms = tuple(
+        term for term in PROHIBITED_MODEL_OUTPUT_TERMS if term.casefold() in normalized
+    )
+    return OutputGuardResult(
+        matched_terms=matched_terms,
+        likely_false_positive=bool(matched_terms)
+        and any(pattern.search(value) for pattern in LIKELY_FALSE_POSITIVE_PATTERNS),
+    )
+
+
+def _contains_prohibited_output(value: str) -> bool:
+    return _evaluate_prohibited_output(value).blocked
+
+
+def _log_bedrock_guard_failure(
+    *,
+    reason: str,
+    model_id: str,
+    region_name: str | None,
+    answer: str,
+    guard_result: OutputGuardResult | None = None,
+    details: str = "",
+) -> None:
+    fingerprint = hashlib.sha256(answer.encode("utf-8")).hexdigest()[:16] if answer else ""
+    logger.warning(
+        "bedrock_chat_provider_fail_closed reason=%s model_id=%s region_name=%s answer_length=%s answer_sha256_prefix=%s matched_terms=%s likely_false_positive=%s details=%s",
+        reason,
+        model_id,
+        region_name,
+        len(answer),
+        fingerprint,
+        ",".join(guard_result.matched_terms) if guard_result else "",
+        guard_result.likely_false_positive if guard_result else False,
+        details,
+    )
 
 
 def _validate_answer_citations(
