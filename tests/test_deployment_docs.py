@@ -245,6 +245,24 @@ def test_new_aws_bootstrap_uses_placeholders_for_operational_identifiers() -> No
     assert "arn:aws:iam::560271561793:role/" not in bootstrap_doc
 
 
+def test_deployment_bootstrap_documents_nat_egress_plan_review_checklist() -> None:
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+    checklist = _markdown_section(deployment_doc, "NAT Egress Plan Review Checklist")
+
+    assert "Before enabling `enable_lambda_nat_egress`" in checklist
+    assert "NAT Gateway" in checklist
+    assert "Elastic IP for the NAT Gateway" in checklist
+    assert "NAT route table" in checklist
+    assert "Lambda subnet route table associations" in checklist
+    assert "Amplify in-place update" in checklist
+    assert "Cognito client in-place update" in checklist
+    assert "RDS in-place update" in checklist
+    assert "Lambda package hash update" in checklist
+    assert "If any non-NAT item is unexplained, do not apply" in checklist
+
+
 def test_github_deploy_role_policy_can_refresh_ingestion_and_nat_resources() -> None:
     bootstrap_script = (REPOSITORY_ROOT / "scripts/bootstrap_github_oidc.sh").read_text(
         encoding="utf-8"

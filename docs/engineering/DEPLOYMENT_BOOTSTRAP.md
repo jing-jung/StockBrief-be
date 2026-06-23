@@ -287,6 +287,29 @@ Resume checklist:
 If the no-change plan reports drift after a pause, stop and inspect the drift
 before applying. Do not use `terraform apply` as a blind repair step.
 
+### NAT Egress Plan Review Checklist
+
+Before enabling `enable_lambda_nat_egress`, classify every Terraform plan change
+that is not one of these expected NAT egress resources:
+
+- NAT Gateway
+- Elastic IP for the NAT Gateway
+- NAT route table
+- Lambda subnet route table associations
+
+Record the classification in the PR body before apply:
+
+| Plan item | Required classification |
+| --- | --- |
+| Amplify in-place update | Confirm whether it is intentional frontend configuration drift. |
+| Cognito client in-place update | Confirm callback/logout URL drift or planned auth setting change. |
+| RDS in-place update | Confirm the change is not a cost, deletion, backup, or networking regression. |
+| Lambda package hash update | Confirm it is caused by the current backend artifact build. |
+
+If any non-NAT item is unexplained, do not apply. Either update the PR with the
+expected reason, split the unrelated change into its own PR, or restore the
+drifted value before creating the NAT Gateway.
+
 ## Deploy Role Permission Model
 
 The bootstrap script creates a GitHub Actions deploy role for Terraform-driven
