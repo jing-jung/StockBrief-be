@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -16,6 +17,8 @@ from app.models import (
     StockEvidenceItemResponse,
 )
 from app.services.chat.composer import compose_chat_answer
+
+logger = logging.getLogger(__name__)
 
 PROHIBITED_MODEL_OUTPUT_TERMS = (
     "매수",  # policy-scan: allow model-output-guard
@@ -128,6 +131,13 @@ class BedrockChatProvider:
                 },
             )
         except (BotoCoreError, ClientError) as exc:
+            logger.warning(
+                "bedrock_chat_provider_request_failed model_id=%s region_name=%s error_type=%s error_message=%s",
+                self.model_id,
+                self.region_name,
+                type(exc).__name__,
+                str(exc),
+            )
             raise ChatProviderUnavailable(
                 "Bedrock chat provider request failed."
             ) from exc

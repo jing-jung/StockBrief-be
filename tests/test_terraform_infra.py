@@ -153,19 +153,27 @@ def test_direct_bedrock_chat_provider_is_conditionally_wired() -> None:
     assert 'variable "bedrock_chat_model_id"' in variables_tf
     assert 'variable "bedrock_chat_region"' in variables_tf
     assert 'chat_provider           = "mock"' in dev_tfvars
-    assert 'bedrock_chat_model_id   = "amazon.nova-micro-v1:0"' in dev_tfvars
+    assert 'bedrock_chat_model_id   = "apac.amazon.nova-micro-v1:0"' in dev_tfvars
 
     assert "CHAT_PROVIDER" in root_main_tf
     assert "BEDROCK_CHAT_MODEL_ID" in root_main_tf
     assert "BEDROCK_CHAT_REGION" in root_main_tf
-    assert "bedrock_chat_model_arn" in root_main_tf
-    assert "foundation-model/${var.bedrock_chat_model_id}" in root_main_tf
+    assert "bedrock_chat_model_arns" in root_main_tf
+    assert "bedrock_chat_uses_inference_profile" in root_main_tf
+    assert 'startswith(var.bedrock_chat_model_id, "apac.")' in root_main_tf
+    assert 'startswith(var.bedrock_chat_model_id, "global.")' in root_main_tf
+    assert "bedrock_chat_base_foundation_model_id" in root_main_tf
+    assert 'replace(var.bedrock_chat_model_id, "/^(apac|global)\\\\./", "")' in root_main_tf
+    assert "foundation-model/${local.bedrock_chat_base_foundation_model_id}" in root_main_tf
+    assert "inference-profile/${var.bedrock_chat_model_id}" in root_main_tf
+    assert "data.aws_caller_identity.current.account_id" in root_main_tf
     assert "var.chat_provider == \"bedrock\"" in root_main_tf
 
-    assert 'variable "bedrock_chat_model_arn"' in api_lambda_variables_tf
+    assert 'variable "bedrock_chat_model_arns"' in api_lambda_variables_tf
     assert "bedrock:InvokeModel" in api_lambda_tf
-    assert "var.bedrock_chat_model_arn == \"\" ? 0 : 1" in api_lambda_tf
+    assert "length(var.bedrock_chat_model_arns) == 0 ? 0 : 1" in api_lambda_tf
     assert "api-bedrock-chat-invoke" in api_lambda_tf
+    assert "profile ARN" in terraform_readme
     assert "provider on `mock`" in terraform_readme
 
 

@@ -125,7 +125,7 @@ def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
     def override_settings() -> Settings:
         return Settings(
             chat_provider="bedrock",
-            bedrock_chat_model_id="amazon.nova-micro-v1:0",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
             bedrock_chat_region="ap-northeast-2",
         )
 
@@ -145,7 +145,7 @@ def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
     assert "연결 근거가 확인된 검토 대상" in payload["data"]["answer"]
     assert payload["data"]["citations"]
     assert fake_client.calls
-    assert fake_client.calls[0]["modelId"] == "amazon.nova-micro-v1:0"
+    assert fake_client.calls[0]["modelId"] == "apac.amazon.nova-micro-v1:0"
     assert fake_client.calls[0]["inferenceConfig"]["maxTokens"] == 700
 
 
@@ -173,7 +173,7 @@ def test_chat_bedrock_provider_rejects_unsupported_model_citation(
     def override_settings() -> Settings:
         return Settings(
             chat_provider="bedrock",
-            bedrock_chat_model_id="amazon.nova-micro-v1:0",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
             bedrock_chat_region="ap-northeast-2",
         )
 
@@ -217,7 +217,7 @@ def test_chat_bedrock_provider_requires_model_citation_when_evidence_exists(
     def override_settings() -> Settings:
         return Settings(
             chat_provider="bedrock",
-            bedrock_chat_model_id="amazon.nova-micro-v1:0",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
             bedrock_chat_region="ap-northeast-2",
         )
 
@@ -250,7 +250,7 @@ def test_chat_bedrock_provider_keeps_policy_redirect_deterministic(
     def override_settings() -> Settings:
         return Settings(
             chat_provider="bedrock",
-            bedrock_chat_model_id="amazon.nova-micro-v1:0",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
             bedrock_chat_region="ap-northeast-2",
         )
 

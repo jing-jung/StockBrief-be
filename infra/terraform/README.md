@@ -446,14 +446,16 @@ call external AI services. To validate the direct Bedrock provider, set:
 
 ```hcl
 chat_provider         = "bedrock"
-bedrock_chat_model_id = "amazon.nova-micro-v1:0"
+bedrock_chat_model_id = "apac.amazon.nova-micro-v1:0"
 bedrock_chat_region   = "" # empty uses aws_region
 ```
 
 When `chat_provider = "bedrock"`, the API Lambda role receives
-`bedrock:InvokeModel` only for the configured foundation model ARN. Keep the
-provider on `mock` unless Bedrock model access, expected request volume, and
-cost are approved for the day's validation.
+`bedrock:InvokeModel` only for the configured foundation model ARN or inference
+profile ARN. Use an `apac.*` or `global.*` inference profile ID when the selected
+model does not support on-demand invocation in the target region. Keep the
+provider on `mock` unless Bedrock model access, expected request volume, and cost
+are approved for the day's validation.
 
 ## Secrets Manager
 

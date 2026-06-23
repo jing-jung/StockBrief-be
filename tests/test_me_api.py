@@ -469,7 +469,7 @@ def test_authenticated_bedrock_chat_persists_after_read_session_close(
     def override_settings() -> Settings:
         return Settings(
             chat_provider="bedrock",
-            bedrock_chat_model_id="amazon.nova-micro-v1:0",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
             bedrock_chat_region="ap-northeast-2",
         )
 

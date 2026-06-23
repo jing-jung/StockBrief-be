@@ -32,8 +32,18 @@ locals {
     local.managed_networking_enabled ? [aws_security_group.rds_proxy[0].id] : local.effective_rds_security_group_ids
   )
 
-  effective_bedrock_chat_region     = var.bedrock_chat_region == "" ? var.aws_region : var.bedrock_chat_region
-  bedrock_chat_foundation_model_arn = var.bedrock_chat_model_id == "" ? "" : "arn:aws:bedrock:${local.effective_bedrock_chat_region}::foundation-model/${var.bedrock_chat_model_id}"
+  effective_bedrock_chat_region             = var.bedrock_chat_region == "" ? var.aws_region : var.bedrock_chat_region
+  bedrock_chat_uses_inference_profile       = startswith(var.bedrock_chat_model_id, "apac.") || startswith(var.bedrock_chat_model_id, "global.")
+  bedrock_chat_base_foundation_model_id     = local.bedrock_chat_uses_inference_profile ? replace(var.bedrock_chat_model_id, "/^(apac|global)\\./", "") : var.bedrock_chat_model_id
+  bedrock_chat_foundation_model_arn         = var.bedrock_chat_model_id == "" ? "" : "arn:aws:bedrock:${local.effective_bedrock_chat_region}::foundation-model/${local.bedrock_chat_base_foundation_model_id}"
+  bedrock_chat_profile_foundation_model_arn = var.bedrock_chat_model_id == "" ? "" : "arn:aws:bedrock:*::foundation-model/${local.bedrock_chat_base_foundation_model_id}"
+  bedrock_chat_inference_profile_arn        = var.bedrock_chat_model_id == "" ? "" : "arn:aws:bedrock:${local.effective_bedrock_chat_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_chat_model_id}"
+  effective_bedrock_chat_model_resource_arns = var.bedrock_chat_model_id == "" ? [] : (
+    local.bedrock_chat_uses_inference_profile ? [
+      local.bedrock_chat_inference_profile_arn,
+      local.bedrock_chat_profile_foundation_model_arn,
+    ] : [local.bedrock_chat_foundation_model_arn]
+  )
 }
 
 resource "aws_security_group" "lambda" {
@@ -200,7 +210,7 @@ module "api_lambda" {
   ingestion_raw_bucket_arn  = try(aws_s3_bucket.ingestion_raw[0].arn, "")
   ingestion_raw_kms_key_arn = try(aws_kms_key.ingestion_raw[0].arn, "")
   agentcore_runtime_arn     = module.agentcore_runtime.runtime_arn
-  bedrock_chat_model_arn    = var.chat_provider == "bedrock" ? local.bedrock_chat_foundation_model_arn : ""
+  bedrock_chat_model_arns   = var.chat_provider == "bedrock" ? local.effective_bedrock_chat_model_resource_arns : []
   jwt_authorizer_enabled    = true
   jwt_authorizer_issuer     = module.cognito.issuer
   jwt_authorizer_audience   = [module.cognito.app_client_id]

@@ -4,7 +4,7 @@ aws_region  = "ap-northeast-2"
 api_lambda_package_path = "../../dist/stockbrief-api-lambda.zip"
 cors_allowed_origins    = "http://localhost:3000,http://127.0.0.1:3000"
 chat_provider           = "mock"
-bedrock_chat_model_id   = "amazon.nova-micro-v1:0"
+bedrock_chat_model_id   = "apac.amazon.nova-micro-v1:0"
 bedrock_chat_region     = ""
 
 enable_amplify         = false
