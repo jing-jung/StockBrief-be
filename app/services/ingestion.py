@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_session_factory
-from app.orm import Disclosure, EvidenceChunk, NewsItem, SourceDocument, Stock
+from app.orm import Disclosure, EvidenceChunk, IngestionRun, NewsItem, SourceDocument, Stock
 from app.services.external.aws_secrets import load_secret_json
 from app.services.external.clients import (
     NAVER_PROVIDER,
@@ -494,6 +494,58 @@ def handle_ingestion_event(event: dict[str, object]) -> dict[str, Any]:
     return result
 
 
+def get_ingestion_status(event: dict[str, object] | None = None) -> dict[str, Any]:
+    request = event or {}
+    with get_session_factory()() as session:
+        return summarize_ingestion_status(
+            session,
+            tickers=_event_tickers(request),
+            limit=_status_limit(request.get("limit")),
+        )
+
+
+def summarize_ingestion_status(
+    session: Session,
+    *,
+    tickers: list[str] | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    normalized_tickers = _unique_tickers(tickers or [])
+    run_statement = (
+        select(IngestionRun)
+        .order_by(IngestionRun.started_at.desc(), IngestionRun.run_id.desc())
+        .limit(limit)
+    )
+    if normalized_tickers:
+        run_statement = run_statement.where(
+            IngestionRun.target_scope["ticker"].as_string().in_(normalized_tickers)
+        )
+    runs = session.scalars(run_statement).all()
+    evidence_statement = (
+        select(EvidenceChunk, SourceDocument)
+        .join(SourceDocument, SourceDocument.id == EvidenceChunk.source_document_id)
+        .order_by(EvidenceChunk.fetched_at.desc(), EvidenceChunk.evidence_id.desc())
+        .limit(limit)
+    )
+    if normalized_tickers:
+        evidence_statement = evidence_statement.where(EvidenceChunk.ticker.in_(normalized_tickers))
+    latest_evidence = session.execute(evidence_statement).all()
+    return {
+        "ok": True,
+        "summary": {
+            "run_status_counts": _run_status_counts(runs),
+            "recent_run_count": len(runs),
+            "latest_evidence_count": len(latest_evidence),
+            "ticker_filter": normalized_tickers,
+        },
+        "recent_runs": [_run_status_dict(run) for run in runs],
+        "latest_evidence": [
+            _evidence_status_dict(chunk=chunk, source=source)
+            for chunk, source in latest_evidence
+        ],
+    }
+
+
 def check_ingestion_readiness(settings: Settings | None = None) -> dict[str, Any]:
     base_settings = settings or get_settings()
     issues: list[dict[str, str]] = []
@@ -942,6 +994,76 @@ def _unique_tickers(tickers: list[str]) -> list[str]:
         seen.add(ticker)
         unique.append(ticker)
     return unique
+
+
+def _event_tickers(event: dict[str, object]) -> list[str]:
+    tickers_value = event.get("tickers")
+    if isinstance(tickers_value, str):
+        return [item.strip() for item in tickers_value.split(",") if item.strip()]
+    if isinstance(tickers_value, list):
+        return [str(item).strip() for item in tickers_value if str(item).strip()]
+    ticker_value = event.get("ticker")
+    if isinstance(ticker_value, str) and ticker_value.strip():
+        return [ticker_value.strip()]
+    return []
+
+
+def _status_limit(value: object) -> int:
+    limit = _positive_int(value, default=10)
+    return min(limit, 50)
+
+
+def _run_status_counts(runs: list[IngestionRun]) -> dict[str, int]:
+    counts = {
+        "started": 0,
+        "succeeded": 0,
+        "partial_failed": 0,
+        "failed": 0,
+    }
+    for run in runs:
+        counts[run.status] = counts.get(run.status, 0) + 1
+    return counts
+
+
+def _run_status_dict(run: IngestionRun) -> dict[str, Any]:
+    target_scope = dict(run.target_scope or {})
+    return {
+        "run_id": run.run_id,
+        "provider": run.provider,
+        "job_type": run.job_type,
+        "status": run.status,
+        "ticker": target_scope.get("ticker"),
+        "source_date": target_scope.get("source_date"),
+        "started_at": _isoformat(run.started_at),
+        "completed_at": _isoformat(run.completed_at),
+        "result_counts": dict(run.result_counts or {}),
+        "error_summary": run.error_summary,
+    }
+
+
+def _evidence_status_dict(
+    *,
+    chunk: EvidenceChunk,
+    source: SourceDocument,
+) -> dict[str, Any]:
+    return {
+        "evidence_id": chunk.evidence_id,
+        "ticker": chunk.ticker,
+        "evidence_type": chunk.evidence_type,
+        "source_name": source.source_name,
+        "source_type": source.source_type,
+        "source_identifier": source.external_id,
+        "published_at": _isoformat(chunk.published_at or source.published_at),
+        "fetched_at": _isoformat(chunk.fetched_at),
+    }
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc).isoformat()
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def _parse_yyyymmdd(value: Any) -> datetime | None:

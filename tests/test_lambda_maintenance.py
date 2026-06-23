@@ -26,6 +26,7 @@ def test_maintenance_rejects_unknown_operation() -> None:
     assert "check_raw_archive_write" in result["supported_operations"]
     assert "check_provider_egress" in result["supported_operations"]
     assert "ingest_provider_batch" in result["supported_operations"]
+    assert "get_ingestion_status" in result["supported_operations"]
 
 
 def test_maintenance_routes_ingestion_readiness_operation(monkeypatch) -> None:
@@ -91,3 +92,23 @@ def test_maintenance_routes_ingestion_operation(monkeypatch) -> None:
             "tickers": ["005930"],
         }
     ]
+
+
+def test_maintenance_routes_ingestion_status_operation(monkeypatch) -> None:
+    calls = []
+
+    def fake_status(event):
+        calls.append(event)
+        return {"ok": True, "summary": {"recent_run_count": 1}}
+
+    monkeypatch.setattr("app.maintenance.get_ingestion_status", fake_status)
+
+    event = {
+        "stockbrief_operation": "get_ingestion_status",
+        "tickers": ["005930"],
+        "limit": 5,
+    }
+    result = handle_maintenance_event(event)
+
+    assert result == {"ok": True, "summary": {"recent_run_count": 1}}
+    assert calls == [event]

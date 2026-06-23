@@ -21,6 +21,7 @@ from app.services.ingestion import (
     build_request_hash,
     build_run_id,
     check_raw_archive_write,
+    summarize_ingestion_status,
     hydrate_external_api_settings,
     handle_ingestion_event,
     upsert_evidence_chunk,
@@ -496,6 +497,83 @@ def test_naver_ingestion_upserts_news_and_source_documents(
     assert evidence_chunk.evidence_type == "news"
     assert evidence_chunk.chunk_text == "테스트 & 뉴스"
     assert evidence_chunk.source_url == "https://news.example/articles/1"
+
+
+def test_ingestion_status_summarizes_recent_runs_and_latest_evidence(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_search_news(self, *, ticker: str, company_name: str, display: int = 10):
+        return ExternalApiResult(
+            provider=NAVER_PROVIDER,
+            endpoint="/v1/search/news.json",
+            cache_key=f"news:{ticker}:{company_name}:{display}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "items": [
+                    {
+                        "title": f"{ticker} 신규 뉴스",
+                        "originallink": f"https://news.example/status-check/{ticker}",
+                        "link": f"https://news.example/status-check/{ticker}",
+                        "description": f"{ticker} 상태 확인용 뉴스",
+                        "pubDate": "Thu, 18 Jun 2026 09:00:00 +0900",
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("app.services.ingestion.NaverNewsClient.search_news", fake_search_news)
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(NAVER_CLIENT_ID="id", NAVER_CLIENT_SECRET="secret"),
+        archiver=NoopPayloadArchiver(),
+    )
+    ingest_result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=NAVER_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+            news_display=1,
+        )
+    )
+    other_ticker_result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=NAVER_PROVIDER,
+            tickers=["000660"],
+            source_date="2026-06-19",
+            news_display=1,
+        )
+    )
+
+    status = summarize_ingestion_status(
+        seeded_session,
+        tickers=["005930"],
+        limit=5,
+    )
+
+    assert ingest_result["ok"] is True
+    assert other_ticker_result["ok"] is True
+    assert status["ok"] is True
+    assert status["summary"]["ticker_filter"] == ["005930"]
+    assert status["summary"]["run_status_counts"]["succeeded"] >= 1
+    assert status["summary"]["recent_run_count"] >= 1
+    assert status["summary"]["latest_evidence_count"] >= 1
+    assert {item["ticker"] for item in status["recent_runs"]} == {"005930"}
+    assert all(item["provider"] == NAVER_PROVIDER for item in status["recent_runs"])
+    assert all(item["source_date"] == "2026-06-18" for item in status["recent_runs"])
+    assert all(item["completed_at"] is not None for item in status["recent_runs"])
+    latest_news = [
+        item
+        for item in status["latest_evidence"]
+        if item["evidence_id"].startswith("ev_naver_news_005930_")
+    ]
+    assert latest_news
+    assert {item["ticker"] for item in status["latest_evidence"]} == {"005930"}
+    assert latest_news[0]["source_name"] == NAVER_PROVIDER
+    assert latest_news[0]["source_type"] == "news"
+    assert latest_news[0]["published_at"] is not None
+    assert latest_news[0]["fetched_at"] is not None
 
 
 def test_provider_fallback_marks_partial_failed_without_persisting_rows(

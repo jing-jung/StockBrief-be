@@ -119,6 +119,35 @@ Expected result:
 - Re-running the same input returns a replayed or duplicate-safe result instead
   of creating uncontrolled duplicate rows.
 
+## Ingestion Status Snapshot
+
+After a manual provider run, ask the deployed Lambda for a non-secret status
+snapshot before opening SQL clients. This operation does not call provider APIs
+and returns recent `ingestion_runs` plus the latest normalized evidence rows.
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --payload '{"stockbrief_operation":"get_ingestion_status","tickers":["005930"],"limit":10}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/stockbrief-ingestion-status-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Expected result:
+
+- Response `ok` is `true`.
+- `summary.run_status_counts.succeeded` increases after successful provider
+  runs.
+- `recent_runs[].provider`, `recent_runs[].status`, `recent_runs[].ticker`, and
+  `recent_runs[].source_date` match the manual smoke input.
+- `latest_evidence[]` includes recent `evidence_id`, `ticker`, `source_name`,
+  `source_type`, `published_at`, and `fetched_at` fields for the requested
+  ticker.
+- The response does not include API keys, client secrets, tokens, or full raw
+  provider payloads.
+
 ## Database Verification
 
 Use a read-only SQL client or a temporary operator session. Do not write manual
