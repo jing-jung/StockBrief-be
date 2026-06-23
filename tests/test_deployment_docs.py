@@ -292,6 +292,11 @@ def test_github_deploy_role_policy_can_refresh_ingestion_and_nat_resources() -> 
         "ec2:DescribeAddressesAttribute",
         "ec2:CreateRouteTable",
         "ec2:AssociateRouteTable",
+        "scheduler:CreateSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:UpdateSchedule",
+        "scheduler:DeleteSchedule",
+        "scheduler:TagResource",
     ]:
         assert action in deployment_actions
     assert "Terraform refresh" in deployment_doc
