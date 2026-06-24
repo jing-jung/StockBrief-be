@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ from app.services.external.types import ExternalApiResult, ExternalRequest, Exte
 from app.services.ingestion_idempotency import IngestionIdempotencyService
 
 
+logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = (OPENDART_PROVIDER, NAVER_PROVIDER)
 MAX_TICKERS_PER_BATCH = 20
 MAX_OPENDART_PAGE_COUNT = 100
@@ -1013,9 +1015,18 @@ def upsert_evidence_chunk(
             session.flush()
         return chunk
     except IntegrityError:
-        existing_after_conflict = session.scalars(
-            select(EvidenceChunk).where(EvidenceChunk.evidence_id == evidence_id)
-        ).first()
+        logger.warning(
+            "evidence_chunk_upsert_conflict_recovered evidence_id=%s ticker=%s source_document_id=%s",
+            evidence_id,
+            ticker,
+            source_document.id,
+        )
+        if chunk in session:
+            session.expunge(chunk)
+        with session.no_autoflush:
+            existing_after_conflict = session.scalars(
+                select(EvidenceChunk).where(EvidenceChunk.evidence_id == evidence_id)
+            ).first()
         if existing_after_conflict is None:
             raise
         return apply_values(existing_after_conflict)

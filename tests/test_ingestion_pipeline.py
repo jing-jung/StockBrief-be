@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 from sqlalchemy import insert, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings
@@ -260,6 +262,7 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
 
 
 def test_evidence_chunk_upsert_recovers_from_concurrent_insert_conflict(
+    caplog,
     monkeypatch,
     seeded_session: Session,
 ) -> None:
@@ -273,43 +276,42 @@ def test_evidence_chunk_upsert_recovers_from_concurrent_insert_conflict(
     )
 
     original_scalars = seeded_session.scalars
-    injected = {"done": False}
+    original_flush = seeded_session.flush
+    evidence_lookup = {"count": 0}
+    conflict = {"done": False}
 
-    class ConcurrentInsertResult:
+    seeded_session.execute(
+        insert(EvidenceChunk).values(
+            evidence_id="ev_concurrent",
+            ticker="005930",
+            source_document_id=source_document.id,
+            evidence_type="news",
+            chunk_text="old text",
+            source_url="https://example.com/old",
+            published_at=None,
+            fetched_at=datetime.now(timezone.utc),
+            confidence=0.9,
+            metadata_={"provider": "race"},
+        )
+    )
+
+    class RaceMissResult:
         def __init__(self, result):
             self.result = result
 
         def first(self):
-            value = self.result.first()
-            if value is None and not injected["done"]:
-                injected["done"] = True
-                seeded_session.execute(
-                    insert(EvidenceChunk).values(
-                        evidence_id="ev_concurrent",
-                        ticker="005930",
-                        source_document_id=source_document.id,
-                        evidence_type="news",
-                        chunk_text="old text",
-                        source_url="https://example.com/old",
-                        published_at=None,
-                        fetched_at=datetime.now(timezone.utc),
-                        confidence=0.9,
-                        metadata_={"provider": "race"},
-                    )
-                )
-            return value
+            self.result.first()
+            return None
 
         def __getattr__(self, name: str):
             return getattr(self.result, name)
 
     def scalars_with_concurrent_insert(statement, *args, **kwargs):
         result = original_scalars(statement, *args, **kwargs)
-        if (
-            not injected["done"]
-            and "evidence_chunks" in str(statement)
-            and "ev_concurrent" in str(statement)
-        ):
-            return ConcurrentInsertResult(result)
+        if "evidence_chunks" in str(statement):
+            evidence_lookup["count"] += 1
+            if evidence_lookup["count"] == 1:
+                return RaceMissResult(result)
         return result
 
     monkeypatch.setattr(
@@ -317,6 +319,23 @@ def test_evidence_chunk_upsert_recovers_from_concurrent_insert_conflict(
         "scalars",
         scalars_with_concurrent_insert,
     )
+
+    def flush_with_integrity_conflict(*args, **kwargs):
+        has_conflicting_new_chunk = any(
+            isinstance(item, EvidenceChunk) and item.evidence_id == "ev_concurrent"
+            for item in seeded_session.new
+        )
+        if has_conflicting_new_chunk and not conflict["done"]:
+            conflict["done"] = True
+            raise IntegrityError(
+                "insert into evidence_chunks",
+                {},
+                Exception("UNIQUE constraint failed: evidence_chunks.evidence_id"),
+            )
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(seeded_session, "flush", flush_with_integrity_conflict)
+    caplog.set_level(logging.WARNING, logger="app.services.ingestion")
 
     chunk = upsert_evidence_chunk(
         seeded_session,
@@ -335,11 +354,24 @@ def test_evidence_chunk_upsert_recovers_from_concurrent_insert_conflict(
     assert chunk.chunk_text == "new text"
     assert chunk.source_url == "https://example.com/new"
     assert chunk.metadata_ == {"provider": OPENDART_PROVIDER}
+    assert conflict["done"] is True
     assert len(
         seeded_session.scalars(
             select(EvidenceChunk).where(EvidenceChunk.evidence_id == "ev_concurrent")
         ).all()
     ) == 1
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "app.services.ingestion"
+        and "evidence_chunk_upsert_conflict_recovered" in record.getMessage()
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert "evidence_id=ev_concurrent" in records[0].getMessage()
+    assert "ticker=005930" in records[0].getMessage()
+    assert f"source_document_id={source_document.id}" in records[0].getMessage()
+    assert OPENDART_PROVIDER not in records[0].getMessage()
 
 
 def test_explicit_run_id_is_scoped_per_ticker_in_batch(
