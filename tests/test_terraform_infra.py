@@ -325,6 +325,27 @@ def test_managed_security_group_egress_is_port_scoped() -> None:
     assert "source_security_group_id = aws_security_group.rds[0].id" in root_main_tf
 
 
+def test_security_group_rule_transition_apply_is_documented() -> None:
+    terraform_readme = _read("README.md")
+
+    assert "## Security Group Rule Apply Review" in terraform_readme
+    assert "older inline-rule state" in terraform_readme
+    assert "rule deletes and creates in the same apply" in terraform_readme
+    assert "aws_security_group.lambda[0] will be updated in-place" in terraform_readme
+    assert "aws_security_group_rule.lambda_https_egress[0] will be created" in terraform_readme
+    assert "aws_security_group_rule.lambda_database_egress" in terraform_readme
+    assert "aws_security_group_rule.rds_proxy_from_lambda" in terraform_readme
+    assert "aws_security_group_rule.rds_proxy_to_rds" in terraform_readme
+    assert "aws_security_group_rule.rds_from_managed_database_client" in terraform_readme
+    assert "aws_security_group_rule.secretsmanager_endpoint_from_lambda" in terraform_readme
+    assert "terraform plan -var-file=envs/dev/deploy.auto.tfvars.json" in terraform_readme
+    assert "resources should remain\nin-place" in terraform_readme
+    assert "Do not apply if Terraform plans to replace a Security Group" in terraform_readme
+    assert "defined maintenance window" in terraform_readme
+    assert "Secrets Manager connectivity loss is acceptable" in terraform_readme
+    assert "enabling scheduled ingestion" in terraform_readme
+
+
 def test_rds_proxy_operational_alarms_are_defined_and_documented() -> None:
     alarms_tf = _read("alarms.tf")
     rds_proxy_outputs_tf = _read("modules/rds_proxy/outputs.tf")

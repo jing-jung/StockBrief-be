@@ -129,6 +129,61 @@ repository variables required by `.github/workflows/backend-dev-deploy.yml`.
 
 7. After resources exist, update Secrets Manager values outside git and redeploy Lambda/Amplify as needed.
 
+## Security Group Rule Apply Review
+
+Managed dev networking keeps the Security Group resources stable and manages
+their ingress and egress entries through separate `aws_security_group_rule`
+resources. If a plan follows the older inline-rule state, Terraform can show
+rule deletes and creates in the same apply even though the Security Groups
+themselves stay in place.
+
+Expected plan shape during the inline-to-standalone rule transition:
+
+```text
+# aws_security_group.lambda[0] will be updated in-place
+~ resource "aws_security_group" "lambda" {
+    # inline egress block removed from state
+  }
+
+# aws_security_group_rule.lambda_https_egress[0] will be created
++ resource "aws_security_group_rule" "lambda_https_egress" {
+    type        = "egress"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+  }
+```
+
+The same pattern can appear for these managed rules:
+
+- `aws_security_group_rule.lambda_https_egress`
+- `aws_security_group_rule.lambda_database_egress`
+- `aws_security_group_rule.rds_proxy_from_lambda`
+- `aws_security_group_rule.rds_proxy_to_rds`
+- `aws_security_group_rule.rds_from_managed_database_client`
+- `aws_security_group_rule.secretsmanager_endpoint_from_lambda`
+
+Review the plan before applying:
+
+```bash
+terraform plan -var-file=envs/dev/deploy.auto.tfvars.json
+```
+
+The acceptable change is a rule-only replacement: the existing
+`aws_security_group.lambda[0]`, `aws_security_group.rds_proxy[0]`,
+`aws_security_group.rds[0]`, and
+`aws_security_group.secretsmanager_endpoint[0]` resources should remain
+in-place. Do not apply if Terraform plans to replace a Security Group, subnet,
+RDS instance, RDS Proxy, or VPC endpoint unless that larger replacement is
+intentional and reviewed separately.
+
+AWS does not guarantee that every Security Group rule replacement is ordered as
+create-before-delete. Apply this transition only when brief database or
+Secrets Manager connectivity loss is acceptable: a quiet dev period, or a
+defined maintenance window for staging and production. After apply, verify that
+the Lambda path can still reach RDS or RDS Proxy and Secrets Manager before
+enabling scheduled ingestion.
+
 ## Terraform Backend Operations
 
 Terraform backend settings are not normal variables. They are read during
