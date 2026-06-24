@@ -455,6 +455,16 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
       "Resource": "arn:aws:secretsmanager:${region}:${account_id}:secret:${resource_name_prefix}/*"
     },
     {
+      "Sid": "DeployRdsManagedMasterUserSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:${region}:${account_id}:secret:rds!db-*"
+    },
+    {
       "Sid": "DeploySnsTopicsByPrefix",
       "Effect": "Allow",
       "Action": [
@@ -581,6 +591,7 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "kms:UpdateAlias",
         "logs:CreateLogGroup",
         "logs:DescribeLogGroups",
+        "logs:TagResource",
         "rds:AddTagsToResource",
         "rds:CreateDBInstance",
         "rds:CreateDBProxy",

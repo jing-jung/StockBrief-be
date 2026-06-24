@@ -381,6 +381,15 @@ API Gateway, Amplify, CloudFormation, Cognito, EC2 networking, KMS, RDS,
 CloudWatch alarm reads, log group creation/listing, SNS subscription cleanup,
 and STS caller identity.
 
+PR #164 covers only the apply blocker found after the new dev account
+transition. It does not close #52 by itself. The `logs:TagResource` addition
+stays in the wildcard fallback for the current unblock and must remain tracked
+as a future narrowing candidate in #52. The
+`DeployRdsManagedMasterUserSecret` statement is intentionally scoped to
+`arn:aws:secretsmanager:<region>:<account-id>:secret:rds!db-*` because RDS
+managed master user password secrets are created under AWS's `rds!db-*` naming
+scheme instead of the StockBrief `stockbrief-<environment>-*` prefix.
+
 Terraform refresh also needs read permissions for every managed resource type.
 When ingestion raw archive or provider egress resources are enabled, the deploy
 role must be able to describe KMS keys, read S3 bucket public access/lifecycle
@@ -403,6 +412,11 @@ before widening the wildcard fallback. Prefer adding a narrow
 `stockbrief-<environment>-*` ARN statement when the AWS service supports it.
 For policy edits, also validate the generated IAM policy with AWS Access
 Analyzer and resolve `ERROR` findings before applying it to the deploy role.
+After PR #164 merges, record on #52 that the bootstrap rerun updated the live
+deploy role inline policy, the new account/backend `backend-dev-deploy` run
+succeeded or failed with an expected guard, Terraform apply no longer fails on
+`logs:TagResource` or `rds!db-*` Secrets Manager permissions, and the
+`rds!db-*` exception remains part of the least-privilege tracking rationale.
 Keep the least-privilege hardening issue open until the bootstrap rerun and
 `backend-dev-deploy` verification are complete, then record the result on that
 issue before deciding whether it is done.
