@@ -322,16 +322,60 @@ def test_bootstrap_reconciles_dev_environment_branch_policy_to_main_only() -> No
     ).read_text(encoding="utf-8")
 
     policy_reconciliation = bootstrap_script[
-        bootstrap_script.index("obsolete_branch_policy_ids=") :
+        bootstrap_script.index("obsolete_branch_policies=") :
         bootstrap_script.index("echo \"Setting GitHub repository variables")
     ]
 
-    assert "obsolete_branch_policy_ids" in policy_reconciliation
+    assert "obsolete_branch_policies" in policy_reconciliation
     assert '.name != \\"${branch_escaped}\\"' in policy_reconciliation
+    assert "[.name, .id] | @tsv" in policy_reconciliation
+    assert "Obsolete GitHub Environment branch policies" in policy_reconciliation
+    assert (
+        "name=${obsolete_branch_policy_name} id=${obsolete_branch_policy_id}"
+        in policy_reconciliation
+    )
     assert (
         "deployment-branch-policies/${obsolete_branch_policy_id}"
         in policy_reconciliation
     )
     assert "gh api --method DELETE" in policy_reconciliation
+    assert "run_change gh api --method DELETE" in policy_reconciliation
     assert "|| true" not in policy_reconciliation
     assert "allow only the\n`main` branch" in deployment_doc
+
+
+def test_bootstrap_dry_run_guards_write_actions() -> None:
+    bootstrap_script = (REPOSITORY_ROOT / "scripts/bootstrap_github_oidc.sh").read_text(
+        encoding="utf-8"
+    )
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "--dry-run" in bootstrap_script
+    assert "dry_run=\"false\"" in bootstrap_script
+    assert "Dry-run mode enabled" in bootstrap_script
+    assert "run_change()" in bootstrap_script
+    assert "DRY RUN: %s" in bootstrap_script
+
+    for write_call in [
+        "run_change aws s3api create-bucket",
+        "run_change aws s3api put-bucket-versioning",
+        "run_change aws dynamodb create-table",
+        "run_change aws iam create-open-id-connect-provider",
+        "run_change aws iam update-assume-role-policy",
+        "run_change aws iam create-role",
+        "run_change aws iam put-role-policy",
+        "run_change gh api --method PUT",
+        "run_change gh api --method POST",
+        "run_change gh api --method DELETE",
+        "run_change gh variable set",
+    ]:
+        assert write_call in bootstrap_script
+
+    assert "scripts/bootstrap_github_oidc.sh --dry-run" in deployment_doc
+    assert (
+        "Run without `--dry-run` only after reviewing the planned changes"
+        in deployment_doc
+    )
+    assert "branch name and policy ID" in deployment_doc

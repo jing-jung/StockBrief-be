@@ -30,6 +30,7 @@ Options:
   --lock-table VALUE        Terraform lock table. Default: stockbrief-terraform-locks
   --role-name VALUE         IAM deploy role name. Default: stockbrief-<environment>-github-actions-deploy
   --alarm-emails-json VALUE JSON array for OPERATIONAL_ALARM_EMAILS_JSON. Default: []
+  --dry-run                 Print planned write actions without changing AWS or GitHub resources.
   -h, --help                Show this help.
 USAGE
 }
@@ -45,6 +46,15 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+run_change() {
+  if [ "$dry_run" = "true" ]; then
+    printf 'DRY RUN: %s\n' "$*"
+    return 0
+  fi
+
+  "$@" >/dev/null
+}
+
 environment="dev"
 region="ap-northeast-2"
 github_owner="80-hours-a-week"
@@ -54,6 +64,7 @@ state_bucket=""
 lock_table="stockbrief-terraform-locks"
 role_name=""
 alarm_emails_json="[]"
+dry_run="false"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -92,6 +103,10 @@ while [ "$#" -gt 0 ]; do
     --alarm-emails-json)
       alarm_emails_json="$2"
       shift 2
+      ;;
+    --dry-run)
+      dry_run="true"
+      shift
       ;;
     -h|--help)
       usage
@@ -158,53 +173,59 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 echo "Bootstrapping StockBrief ${environment} deployment in AWS account ${account_id} (${region})"
 
+if [ "$dry_run" = "true" ]; then
+  echo "Dry-run mode enabled. AWS and GitHub write actions will be logged only."
+fi
+
 if aws s3api head-bucket --bucket "$state_bucket" >/dev/null 2>&1; then
   echo "S3 state bucket already exists: ${state_bucket}"
 else
   echo "Creating S3 state bucket: ${state_bucket}"
   if [ "$region" = "us-east-1" ]; then
-    aws s3api create-bucket --bucket "$state_bucket" >/dev/null
+    run_change aws s3api create-bucket --bucket "$state_bucket"
   else
-    aws s3api create-bucket \
+    run_change aws s3api create-bucket \
       --bucket "$state_bucket" \
       --region "$region" \
-      --create-bucket-configuration "LocationConstraint=${region}" >/dev/null
+      --create-bucket-configuration "LocationConstraint=${region}"
   fi
 fi
 
-aws s3api put-bucket-versioning \
+run_change aws s3api put-bucket-versioning \
   --bucket "$state_bucket" \
-  --versioning-configuration Status=Enabled >/dev/null
+  --versioning-configuration Status=Enabled
 
-aws s3api put-bucket-encryption \
+run_change aws s3api put-bucket-encryption \
   --bucket "$state_bucket" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 
-aws s3api put-public-access-block \
+run_change aws s3api put-public-access-block \
   --bucket "$state_bucket" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 
 if aws dynamodb describe-table --table-name "$lock_table" --region "$region" >/dev/null 2>&1; then
   echo "DynamoDB lock table already exists: ${lock_table}"
 else
   echo "Creating DynamoDB lock table: ${lock_table}"
-  aws dynamodb create-table \
+  run_change aws dynamodb create-table \
     --table-name "$lock_table" \
     --attribute-definitions AttributeName=LockID,AttributeType=S \
     --key-schema AttributeName=LockID,KeyType=HASH \
     --billing-mode PAY_PER_REQUEST \
-    --region "$region" >/dev/null
-  aws dynamodb wait table-exists --table-name "$lock_table" --region "$region"
+    --region "$region"
+  if [ "$dry_run" != "true" ]; then
+    aws dynamodb wait table-exists --table-name "$lock_table" --region "$region"
+  fi
 fi
 
 if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$oidc_provider_arn" >/dev/null 2>&1; then
   echo "GitHub OIDC provider already exists: ${oidc_provider_arn}"
 else
   echo "Creating GitHub OIDC provider: ${oidc_provider_url}"
-  aws iam create-open-id-connect-provider \
+  run_change aws iam create-open-id-connect-provider \
     --url "https://${oidc_provider_url}" \
     --client-id-list sts.amazonaws.com \
-    --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 >/dev/null
+    --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
 fi
 
 owner_escaped="$(json_escape "$github_owner")"
@@ -500,14 +521,14 @@ POLICY
 
 if aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
   echo "Updating IAM role trust policy: ${role_name}"
-  aws iam update-assume-role-policy \
+  run_change aws iam update-assume-role-policy \
     --role-name "$role_name" \
-    --policy-document "file://${tmpdir}/trust-policy.json" >/dev/null
+    --policy-document "file://${tmpdir}/trust-policy.json"
 else
   echo "Creating IAM role: ${role_name}"
-  aws iam create-role \
+  run_change aws iam create-role \
     --role-name "$role_name" \
-    --assume-role-policy-document "file://${tmpdir}/trust-policy.json" >/dev/null
+    --assume-role-policy-document "file://${tmpdir}/trust-policy.json"
 fi
 
 legacy_policy_name="stockbrief-${environment}-backend-deploy"
@@ -515,31 +536,37 @@ new_policy_name="stockbrief-${environment}-deploy-access"
 
 if [ "$legacy_policy_name" != "$new_policy_name" ]; then
   legacy_delete_error="${tmpdir}/delete-legacy-policy.err"
-  if ! aws iam delete-role-policy \
-    --role-name "$role_name" \
-    --policy-name "$legacy_policy_name" 2>"$legacy_delete_error"; then
-    legacy_delete_message="$(cat "$legacy_delete_error")"
-    case "$legacy_delete_message" in
-      *NoSuchEntity*)
-        ;;
-      *)
-        printf '%s\n' "$legacy_delete_message" >&2
-        exit 1
-        ;;
-    esac
+  if [ "$dry_run" = "true" ]; then
+    run_change aws iam delete-role-policy \
+      --role-name "$role_name" \
+      --policy-name "$legacy_policy_name"
+  else
+    if ! aws iam delete-role-policy \
+      --role-name "$role_name" \
+      --policy-name "$legacy_policy_name" 2>"$legacy_delete_error"; then
+      legacy_delete_message="$(cat "$legacy_delete_error")"
+      case "$legacy_delete_message" in
+        *NoSuchEntity*)
+          ;;
+        *)
+          printf '%s\n' "$legacy_delete_message" >&2
+          exit 1
+          ;;
+      esac
+    fi
   fi
 fi
 
-aws iam put-role-policy \
+run_change aws iam put-role-policy \
   --role-name "$role_name" \
   --policy-name "$new_policy_name" \
-  --policy-document "file://${tmpdir}/deploy-policy.json" >/dev/null
+  --policy-document "file://${tmpdir}/deploy-policy.json"
 
 echo "Configuring GitHub Environment branch policy: ${repo_full_name}/${environment}"
-gh api --method PUT "repos/${repo_full_name}/environments/${environment}" \
+run_change gh api --method PUT "repos/${repo_full_name}/environments/${environment}" \
   -F wait_timer=0 \
   -F 'deployment_branch_policy[protected_branches]=false' \
-  -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+  -F 'deployment_branch_policy[custom_branch_policies]=true'
 
 existing_branch_policy_id="$(
   gh api "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies" \
@@ -547,35 +574,43 @@ existing_branch_policy_id="$(
 )"
 
 if [ -z "$existing_branch_policy_id" ]; then
-  gh api --method POST "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies" \
+  run_change gh api --method POST "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies" \
     -f name="$github_branch" \
-    -f type=branch >/dev/null
+    -f type=branch
 fi
 
-obsolete_branch_policy_ids="$(
+obsolete_branch_policies="$(
   gh api "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies" \
-    --jq ".branch_policies[] | select(.type == \"branch\" and .name != \"${branch_escaped}\") | .id"
+    --jq ".branch_policies[] | select(.type == \"branch\" and .name != \"${branch_escaped}\") | [.name, .id] | @tsv"
 )"
 
-if [ -n "$obsolete_branch_policy_ids" ]; then
-  echo "Removing obsolete GitHub Environment branch policies for ${repo_full_name}/${environment}"
-  while IFS= read -r obsolete_branch_policy_id; do
+if [ -n "$obsolete_branch_policies" ]; then
+  echo "Obsolete GitHub Environment branch policies for ${repo_full_name}/${environment}:"
+  while IFS="$(printf '\t')" read -r obsolete_branch_policy_name obsolete_branch_policy_id; do
     [ -n "$obsolete_branch_policy_id" ] || continue
-    gh api --method DELETE \
-      "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies/${obsolete_branch_policy_id}" >/dev/null
+    echo "  - name=${obsolete_branch_policy_name} id=${obsolete_branch_policy_id}"
   done <<EOF
-${obsolete_branch_policy_ids}
+${obsolete_branch_policies}
+EOF
+
+  echo "Removing obsolete GitHub Environment branch policies for ${repo_full_name}/${environment}"
+  while IFS="$(printf '\t')" read -r _obsolete_branch_policy_name obsolete_branch_policy_id; do
+    [ -n "$obsolete_branch_policy_id" ] || continue
+    run_change gh api --method DELETE \
+      "repos/${repo_full_name}/environments/${environment}/deployment-branch-policies/${obsolete_branch_policy_id}"
+  done <<EOF
+${obsolete_branch_policies}
 EOF
 fi
 
 echo "Setting GitHub repository variables on ${repo_full_name}"
-gh variable set "$deploy_role_var" --repo "$repo_full_name" --body "$role_arn" >/dev/null
+run_change gh variable set "$deploy_role_var" --repo "$repo_full_name" --body "$role_arn"
 
 if [ "$deploy_role_var" != "AWS_DEV_DEPLOY_ROLE_ARN" ] && [ "$environment" = "dev" ]; then
-  gh variable set AWS_DEV_DEPLOY_ROLE_ARN --repo "$repo_full_name" --body "$role_arn" >/dev/null
+  run_change gh variable set AWS_DEV_DEPLOY_ROLE_ARN --repo "$repo_full_name" --body "$role_arn"
 fi
 
-gh variable set OPERATIONAL_ALARM_EMAILS_JSON --repo "$repo_full_name" --body "$alarm_emails_json" >/dev/null
+run_change gh variable set OPERATIONAL_ALARM_EMAILS_JSON --repo "$repo_full_name" --body "$alarm_emails_json"
 
 cat <<SUMMARY
 

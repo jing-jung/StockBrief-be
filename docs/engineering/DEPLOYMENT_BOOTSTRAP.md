@@ -55,8 +55,14 @@ scripts/bootstrap_github_oidc.sh \
   --region ap-northeast-2 \
   --github-owner 80-hours-a-week \
   --github-repo StockBrief-be \
+  --dry-run \
   --alarm-emails-json '["REPLACE_WITH_ALERT_EMAIL"]'
 ```
+
+Run without `--dry-run` only after reviewing the planned changes. Dry-run mode
+keeps AWS and GitHub write actions as terminal logs. If existing GitHub
+Environment branch policies would be removed, the script prints each obsolete
+policy's branch name and policy ID before the delete step.
 
 The script creates or updates:
 
@@ -365,6 +371,7 @@ resources are disabled or destroyed.
 After changing Terraform-managed service permissions, re-run:
 
 ```bash
+scripts/bootstrap_github_oidc.sh --dry-run --alarm-emails-json '["REPLACE_WITH_ALERT_EMAIL"]'
 scripts/bootstrap_github_oidc.sh --alarm-emails-json '["REPLACE_WITH_ALERT_EMAIL"]'
 ```
 
