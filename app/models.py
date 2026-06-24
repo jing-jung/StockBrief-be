@@ -434,3 +434,18 @@ class UserChatSessionResponse(BaseModel):
 class UserChatSessionListResponse(BaseModel):
     items: list[UserChatSessionResponse]
     count: int
+
+
+class UserChatMessageResponse(BaseModel):
+    message_id: str
+    role: str
+    content: str
+    ticker: str | None = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    safety_flags: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime
+
+
+class UserChatSessionDetailResponse(BaseModel):
+    session: UserChatSessionResponse
+    messages: list[UserChatMessageResponse]

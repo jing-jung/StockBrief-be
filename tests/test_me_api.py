@@ -376,12 +376,16 @@ def test_chat_sessions_are_user_scoped(seeded_session: Session) -> None:
         assert created.status_code == 200
         assert created.json()["ticker"] == "005930"
         assert first_client.get("/v1/me/chat-sessions").json()["count"] == 1
+        session_id = created.json()["session_id"]
     finally:
         app.dependency_overrides.clear()
 
     second_client = _authenticated_client(seeded_session, "cognito-sub-2")
     try:
         assert second_client.get("/v1/me/chat-sessions").json()["count"] == 0
+        detail = second_client.get(f"/v1/me/chat-sessions/{session_id}")
+        assert detail.status_code == 404
+        assert detail.json()["error"]["code"] == "CHAT_SESSION_NOT_FOUND"
     finally:
         app.dependency_overrides.clear()
 
@@ -411,12 +415,50 @@ def test_authenticated_chat_persists_session_and_messages(seeded_session: Sessio
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["data"]["session_id"]
+        session_id = payload["data"]["session_id"]
+        assert session_id
         assert client.get("/v1/me/chat-sessions").json()["count"] == 1
         messages = seeded_session.scalars(
-            select(ChatMessage).where(ChatMessage.session_id == payload["data"]["session_id"])
+            select(ChatMessage).where(ChatMessage.session_id == session_id)
         ).all()
-        assert [message.role for message in messages] == ["user", "assistant"]
+        shared_created_at = messages[0].created_at
+        for message in messages:
+            message.created_at = shared_created_at
+        seeded_session.add(
+            ChatMessage(
+                message_id="msg_system_same_timestamp",
+                session_id=session_id,
+                role="system",
+                content="내부 시스템 메모",
+                ticker="005930",
+                citations=[],
+                safety_flags=[],
+                created_at=shared_created_at,
+            )
+        )
+        seeded_session.commit()
+
+        detail = client.get(f"/v1/me/chat-sessions/{session_id}")
+        assert detail.status_code == 200
+        detail_payload = detail.json()
+        assert detail_payload["session"]["session_id"] == session_id
+        assert detail_payload["session"]["ticker"] == "005930"
+        assert [message["role"] for message in detail_payload["messages"]] == [
+            "user",
+            "assistant",
+            "system",
+        ]
+        assert detail_payload["messages"][0]["content"] == "왜 추천됐나요?"
+        assert detail_payload["messages"][1]["content"] == payload["data"]["answer"]
+        assert detail_payload["messages"][1]["citations"]
+        assert detail_payload["messages"][1]["safety_flags"] == [
+            {"policy_status": "allowed"}
+        ]
+        assert detail_payload["messages"][2]["content"] == "내부 시스템 메모"
+        messages = seeded_session.scalars(
+            select(ChatMessage).where(ChatMessage.session_id == session_id)
+        ).all()
+        assert {message.role for message in messages} == {"user", "assistant", "system"}
         assistant_message = next(message for message in messages if message.role == "assistant")
         assert {"evidence_id", "type", "title", "source_url", "published_at"}.issubset(
             assistant_message.citations[0]

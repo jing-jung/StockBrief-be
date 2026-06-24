@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -19,12 +19,14 @@ from app.models import (
     ServerWatchlistItemUpdateRequest,
     ServerWatchlistResponse,
     UserChatSessionCreateRequest,
+    UserChatSessionDetailResponse,
     UserChatSessionListResponse,
+    UserChatMessageResponse,
     UserChatSessionResponse,
     UserPreferencesResponse,
     UserPreferencesUpdateRequest,
 )
-from app.orm import ChatSession, Stock, User, UserPreference, Watchlist
+from app.orm import ChatMessage, ChatSession, Stock, User, UserPreference, Watchlist
 from app.ticker import validate_ticker
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -252,6 +254,47 @@ def create_chat_session(
     return _chat_session_response(row)
 
 
+@router.get("/chat-sessions/{session_id}", response_model=UserChatSessionDetailResponse)
+def get_chat_session_detail(
+    session_id: str,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+) -> UserChatSessionDetailResponse:
+    row = session.scalars(
+        select(ChatSession).where(
+            ChatSession.session_id == session_id,
+            ChatSession.user_id == current_user.id,
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "CHAT_SESSION_NOT_FOUND",
+                "message": "Chat session was not found.",
+            },
+        )
+
+    role_order = case(
+        (ChatMessage.role == "user", 0),
+        (ChatMessage.role == "assistant", 1),
+        else_=2,
+    )
+    messages = session.scalars(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == row.session_id)
+        .order_by(
+            ChatMessage.created_at.asc(),
+            role_order.asc(),
+            ChatMessage.message_id.asc(),
+        )
+    ).all()
+    return UserChatSessionDetailResponse(
+        session=_chat_session_response(row),
+        messages=[_chat_message_response(message) for message in messages],
+    )
+
+
 def _me_response(user: User) -> MeResponse:
     return MeResponse(
         id=str(user.id),
@@ -301,6 +344,18 @@ def _chat_session_response(row: ChatSession) -> UserChatSessionResponse:
         title=row.title,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _chat_message_response(row: ChatMessage) -> UserChatMessageResponse:
+    return UserChatMessageResponse(
+        message_id=row.message_id,
+        role=row.role,
+        content=row.content,
+        ticker=row.ticker,
+        citations=list(row.citations or []),
+        safety_flags=list(row.safety_flags or []),
+        created_at=row.created_at,
     )
 
 

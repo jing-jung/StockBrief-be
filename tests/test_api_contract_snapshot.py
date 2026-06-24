@@ -19,6 +19,7 @@ EXPECTED_API_PATHS = {
     "/v1/me/watchlist/import": ["post"],
     "/v1/me/watchlist/{ticker}": ["delete", "patch"],
     "/v1/me/chat-sessions": ["get", "post"],
+    "/v1/me/chat-sessions/{session_id}": ["get"],
 }
 
 RECOMMENDATION_CANDIDATE_REQUIRED_FIELDS = {
