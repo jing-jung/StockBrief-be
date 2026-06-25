@@ -10,6 +10,30 @@ def _read(path: str) -> str:
     return (TERRAFORM_ROOT / path).read_text(encoding="utf-8")
 
 
+def test_multi_account_dev_profile_templates_are_available() -> None:
+    variables_tf = _read("variables.tf")
+    dev_backend = _read("backends/dev.hcl")
+    template_backend = _read("backends/dev-template.hcl.example")
+    template_tfvars = json.loads(_read("envs/dev-template/deploy.auto.tfvars.json.example"))
+
+    assert "dev-<member>" in variables_tf
+    assert 'regex("^dev-[a-z0-9][a-z0-9-]*$"' in variables_tf
+    assert 'bucket         = "stockbrief-terraform-state-217139788460-ap-northeast-2"' in dev_backend
+    assert 'key            = "stockbrief/dev/terraform.tfstate"' in dev_backend
+    assert "REPLACE_WITH_ACCOUNT_ID" in template_backend
+    assert "REPLACE_WITH_TARGET_ENV" in template_backend
+    assert not (TERRAFORM_ROOT / "backends/dev-junwoo.hcl").exists()
+    assert not (TERRAFORM_ROOT / "envs/dev-junwoo/deploy.auto.tfvars.json").exists()
+    assert template_tfvars["environment"] == "REPLACE_WITH_TARGET_ENV"
+    assert template_tfvars["enable_amplify"] is False
+    assert template_tfvars["enable_lambda_nat_egress"] is False
+    assert template_tfvars["enable_ingestion_scheduler"] is False
+    assert template_tfvars["enable_rds_proxy"] is False
+    assert template_tfvars["db_deletion_protection"] is False
+    assert template_tfvars["db_skip_final_snapshot"] is True
+    assert template_tfvars["vpc_id"] == "REPLACE_WITH_VPC_ID"
+
+
 def test_amplify_module_targets_frontend_repository_root() -> None:
     main_tf = _read("modules/amplify/main.tf")
 
@@ -109,6 +133,8 @@ def test_dev_deploy_tfvars_documents_low_cost_local_only_bootstrap() -> None:
 
     assert deploy_tfvars["enable_amplify"] is False
     assert deploy_tfvars["amplify_cognito_redirect_uri"] == ""
+    assert deploy_tfvars["agentcore_runtime_enabled"] is False
+    assert deploy_tfvars["agentcore_runtime_container_uri"] == ""
     assert "amplifyapp.com" not in deploy_tfvars["cors_allowed_origins"]
     assert all("amplifyapp.com" not in url for url in deploy_tfvars["cognito_callback_urls"])
     assert all("amplifyapp.com" not in url for url in deploy_tfvars["cognito_logout_urls"])
@@ -116,6 +142,8 @@ def test_dev_deploy_tfvars_documents_low_cost_local_only_bootstrap() -> None:
     assert "local-only bootstrap posture" in terraform_readme
     assert "track the callback, logout, and CORS change through" in terraform_readme
     assert "#162" in terraform_readme
+    assert "keep `amplify_cognito_redirect_uri` empty" in terraform_readme
+    assert "Keep `agentcore_runtime_container_uri` empty" in terraform_readme
 
 
 def test_dev_account_transition_requires_backend_deploy_result_on_issue_52() -> None:

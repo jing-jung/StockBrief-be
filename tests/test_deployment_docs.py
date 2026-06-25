@@ -80,12 +80,64 @@ def test_backend_dev_deploy_checks_assumed_account_matches_backend() -> None:
     ).read_text(encoding="utf-8")
 
     assert "Verify deploy account matches Terraform backend" in workflow
-    assert 'DEPLOY_ROLE_ARN: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}' in workflow
+    assert "target_env:" in workflow
+    assert 'TARGET_ENV: ${{ github.event.inputs.target_env || \'dev\' }}' in workflow
+    assert "backends/{target_env}.hcl" in workflow
+    assert "envs/{target_env}/deploy.auto.tfvars.json" in workflow
+    assert "TF_BACKEND_CONFIG: ${{ steps.deploy-profile.outputs.tf_backend_config }}" in workflow
     assert "scripts/verify_deploy_account_matches_backend.sh" in workflow
     assert "Before Terraform init, `backend-dev-deploy` compares the account" in deployment_doc
     assert "cannot accidentally deploy against a backend that" in deployment_doc
     assert "During account transition work, this failure is the expected guardrail" in deployment_doc
     assert "not as a deployment regression" in deployment_doc
+
+
+def test_backend_dev_deploy_supports_target_environment_profiles() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows/backend-dev-deploy.yml"
+    ).read_text(encoding="utf-8")
+    bootstrap_doc = (
+        REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Resolve deploy profile" in workflow
+    assert 'target_env != "dev" and not target_env.startswith("dev-")' in workflow
+    assert "backend-dev-deploy only accepts dev or dev-* target_env values" in workflow
+    assert "AWS_{target_env.upper().replace('-', '_')}_DEPLOY_ROLE_ARN" in workflow
+    assert 'variables.get("TF_BACKEND_CONFIG_HCL")' in workflow
+    assert 'variables.get("TFVARS_JSON")' in workflow
+    assert "TFVARS_JSON environment must match target_env" in workflow
+    assert 'json.dump(parsed_tfvars, tfvars_file, ensure_ascii=False, indent=2)' in workflow
+    assert "Missing deploy profile file(s):" in workflow
+    assert 'os.path.join(os.environ["TF_DIR"], tf_var_file)' in workflow
+    assert 'os.path.join(os.environ["TF_DIR"], tf_backend_config)' in workflow
+    assert 'terraform init' in workflow
+    assert '-backend-config="${{ steps.deploy-profile.outputs.tf_backend_config }}"' in workflow
+    assert '-var-file="${{ steps.deploy-profile.outputs.tf_var_file }}"' in workflow
+    assert "target_env=dev-junwoo" in bootstrap_doc
+    assert "backends/dev-junwoo.hcl" in bootstrap_doc
+    assert "envs/dev-junwoo/deploy.auto.tfvars.json" in bootstrap_doc
+    assert "`target_env=dev` 또는" in bootstrap_doc
+    assert "`target_env=dev-*`만 허용" in bootstrap_doc
+    assert "TF_BACKEND_CONFIG_HCL" in bootstrap_doc
+    assert "TFVARS_JSON" in bootstrap_doc
+    assert "`amplify_cognito_redirect_uri`는 `enable_amplify=false`" in bootstrap_doc
+    assert "`agentcore_runtime_container_uri`는 `agentcore_runtime_enabled=false`" in bootstrap_doc
+
+
+def test_new_aws_bootstrap_documents_manual_amplify_account_switching() -> None:
+    bootstrap_doc = (
+        REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "FE Amplify 콘솔 수동 생성 방법" in bootstrap_doc
+    assert "현재 활성 AWS 계정마다 Amplify app을 하나 만든다" in bootstrap_doc
+    assert "NEXT_PUBLIC_API_BASE_URL=<api_base_url>/v1" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_USER_POOL_ID=<cognito_user_pool_id>" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=<cognito_app_client_id>" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_HOSTED_UI_DOMAIN=<cognito_hosted_ui_domain에서 https:// 제거>" in bootstrap_doc
+    assert "callback: https://main.<amplify-default-domain>/auth/callback" in bootstrap_doc
+    assert "Amplify access token이나" in bootstrap_doc
 
 
 def test_deploy_account_guard_accepts_matching_accounts(tmp_path: Path) -> None:
@@ -98,6 +150,38 @@ def test_deploy_account_guard_accepts_matching_accounts(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "Verified deploy account 123456789012 matches" in result.stdout
+
+
+def test_deploy_account_guard_accepts_matching_backend_config(
+    tmp_path: Path,
+) -> None:
+    backend_config = tmp_path / "dev-member.hcl"
+    backend_config.write_text(
+        '''
+bucket = "stockbrief-terraform-state-123456789012-ap-northeast-2"
+key    = "stockbrief/dev-member/terraform.tfstate"
+region = "ap-northeast-2"
+''',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/verify_deploy_account_matches_backend.sh"],
+        cwd=REPOSITORY_ROOT,
+        env={
+            **os.environ,
+            "ASSUMED_AWS_ACCOUNT_ID": "123456789012",
+            "DEPLOY_ROLE_ARN": "arn:aws:iam::123456789012:role/stockbrief-dev-member-github-actions-deploy",
+            "TF_DIR": str(tmp_path),
+            "TF_BACKEND_CONFIG": "dev-member.hcl",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "dev-member.hcl" in result.stdout
 
 
 def test_deploy_account_guard_rejects_unparseable_role_arn(tmp_path: Path) -> None:
@@ -357,8 +441,8 @@ def test_new_aws_bootstrap_uses_placeholders_for_operational_identifiers() -> No
         REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
     ).read_text(encoding="utf-8")
 
-    assert "Do not commit those operational identifiers" in bootstrap_doc
-    assert "regardless of repository visibility" in bootstrap_doc
+    assert "실제 계정 ID, 리소스 ID, API ID, Cognito ID, 도메인은" in bootstrap_doc
+    assert "공개 문서에 그대로 남기지 말고" in bootstrap_doc
     assert "<api-gateway-base-url>" in bootstrap_doc
     assert "<cognito-issuer-url>" in bootstrap_doc
     assert "<cognito-user-pool-id>" in bootstrap_doc

@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from functools import lru_cache
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -71,7 +71,9 @@ def _database_url_from_secret_credentials(secret: dict[str, object]) -> str | No
     user = quote(username, safe="")
     secret_password = quote(password, safe="")
     netloc = _format_database_netloc(settings.database_host, settings.database_port)
-    return f"postgresql+psycopg://{user}:{secret_password}@{netloc}/{settings.database_name}"
+    query = urlencode({"sslmode": settings.database_sslmode}) if settings.database_sslmode else ""
+    suffix = f"?{query}" if query else ""
+    return f"postgresql+psycopg://{user}:{secret_password}@{netloc}/{settings.database_name}{suffix}"
 
 
 def _format_database_netloc(database_host: str, database_port: int) -> str:

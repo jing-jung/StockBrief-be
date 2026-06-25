@@ -1,0 +1,52 @@
+{
+  "environment": "REPLACE_WITH_TARGET_ENV",
+  "aws_region": "ap-northeast-2",
+  "api_lambda_package_path": "../../dist/stockbrief-api-lambda.zip",
+  "cors_allowed_origins": "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+  "enable_amplify": false,
+  "amplify_repository_url": "https://github.com/80-hours-a-week/StockBrief-fe",
+  "amplify_branch_name": "main",
+  "amplify_cognito_redirect_uri": "",
+  "cognito_callback_urls": [
+    "http://localhost:3000/auth/callback",
+    "http://localhost:3001/auth/callback",
+    "http://127.0.0.1:3000/auth/callback",
+    "http://127.0.0.1:3001/auth/callback"
+  ],
+  "cognito_logout_urls": [
+    "http://localhost:3000/account",
+    "http://localhost:3001/account",
+    "http://127.0.0.1:3000/account",
+    "http://127.0.0.1:3001/account"
+  ],
+  "cognito_hosted_ui_domain_prefix": "stockbrief-REPLACE_WITH_TARGET_ENV-REPLACE_WITH_ACCOUNT_ID",
+  "db_instance_class": "db.t4g.micro",
+  "db_allocated_storage_gb": 20,
+  "db_deletion_protection": false,
+  "db_skip_final_snapshot": true,
+  "db_backup_retention_period": 1,
+  "vpc_id": "REPLACE_WITH_VPC_ID",
+  "db_subnet_ids": [
+    "REPLACE_WITH_PRIVATE_SUBNET_ID_A",
+    "REPLACE_WITH_PRIVATE_SUBNET_ID_B"
+  ],
+  "db_security_group_ids": [],
+  "rds_proxy_security_group_ids": [],
+  "enable_rds_proxy": false,
+  "lambda_subnet_ids": [
+    "REPLACE_WITH_PRIVATE_SUBNET_ID_A",
+    "REPLACE_WITH_PRIVATE_SUBNET_ID_B"
+  ],
+  "lambda_security_group_ids": [],
+  "vpc_endpoint_route_table_ids": [
+    "REPLACE_WITH_PRIVATE_ROUTE_TABLE_ID"
+  ],
+  "enable_lambda_nat_egress": false,
+  "lambda_nat_public_subnet_id": "",
+  "lambda_nat_route_subnet_ids": [],
+  "agentcore_runtime_enabled": false,
+  "agentcore_runtime_container_uri": "",
+  "agentcore_network_mode": "PUBLIC",
+  "enable_ingestion_scheduler": false,
+  "ingestion_schedule_jobs": []
+}

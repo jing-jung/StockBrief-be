@@ -213,8 +213,24 @@ Environment key convention:
 | Environment | State key |
 | --- | --- |
 | `dev` | `stockbrief/dev/terraform.tfstate` |
+| `dev-<member>` | `stockbrief/dev-<member>/terraform.tfstate` |
 | `staging` | `stockbrief/staging/terraform.tfstate` |
 | `prod` | `stockbrief/prod/terraform.tfstate` |
+
+Store account-specific backend files under `backends/`:
+
+```text
+backends/dev.hcl
+backends/dev-<member>.hcl
+```
+
+Use `backends/dev-template.hcl.example` and
+`envs/dev-template/deploy.auto.tfvars.json.example` when onboarding another
+team member's AWS account.
+Commit account-specific files only when the team explicitly accepts exposing
+non-secret AWS identifiers such as account ID, VPC ID, subnet ID, route table
+ID, Cognito domain prefix, and Amplify domain in the repository. Otherwise keep
+the real profile in an internal handoff location and leave only templates here.
 
 Use `terraform init -reconfigure` when selecting a different backend that already
 has the intended state or starts empty. Use `terraform init -migrate-state` only
@@ -222,14 +238,16 @@ when moving the same state to a new backend location. Before any apply after a
 backend change, run:
 
 ```bash
+terraform init -reconfigure -backend-config=backends/<target_env>.hcl
 terraform state list
-terraform plan -var-file=envs/dev/deploy.auto.tfvars.json
+terraform plan -var-file=envs/<target_env>/deploy.auto.tfvars.json
 ```
 
-For GitHub Actions, `backend-dev-deploy` initializes Terraform with the committed
-`backend.tf` and `envs/dev/deploy.auto.tfvars.json`. Any environment expansion
-must change backend config, tfvars, and workflow behavior together in one PR to
-avoid applying one environment's variables to another environment's state.
+For GitHub Actions, `backend-dev-deploy` resolves `target_env`, initializes
+Terraform with `backends/<target_env>.hcl`, and plans with
+`envs/<target_env>/deploy.auto.tfvars.json`. For account-specific profiles,
+prefer GitHub Environment variables `TF_BACKEND_CONFIG_HCL` and `TFVARS_JSON`;
+the workflow creates both files on the runner when they are not committed.
 After a dev backend/account transition PR merges, run `backend-dev-deploy` and
 record the success or expected guard failure on #52 before treating the deploy
 role hardening work as complete.
@@ -763,19 +781,21 @@ Operational alarm rollout checklist:
 
 The dev backend deployment uses GitHub Actions OIDC instead of long-lived AWS
 access keys. The `backend-dev-deploy` workflow runs on pushes to `main` and on
-manual dispatch. The deploy job is attached to the GitHub Environment named
-`dev`.
+manual dispatch. Pushes to `main` deploy `target_env=dev`; manual dispatch can
+choose another dev profile such as `dev-junwoo`. This workflow rejects
+non-dev profiles; staging and production must use separate workflows and
+approval policies.
 
-Because the job uses `environment: dev`, the IAM OIDC trust policy expects the
-GitHub token subject to be:
+Because the job uses `environment: <target_env>`, the IAM OIDC trust policy
+expects the GitHub token subject to be:
 
 ```text
-repo:80-hours-a-week/StockBrief-be:environment:dev
+repo:80-hours-a-week/StockBrief-be:environment:<target_env>
 ```
 
-The `dev` GitHub Environment uses a custom deployment branch policy that allows
-only the `main` branch. Keep that branch policy aligned with the IAM trust
-policy whenever the workflow branch or environment name changes.
+Each GitHub Environment uses a custom deployment branch policy that allows only
+the `main` branch. Keep that branch policy aligned with the IAM trust policy
+whenever the workflow branch or environment name changes.
 
 Bootstrap resources are generated per AWS account:
 
@@ -784,24 +804,32 @@ Bootstrap resources are generated per AWS account:
 | Terraform state bucket | `stockbrief-terraform-state-<account-id>-ap-northeast-2` |
 | Terraform lock table | `stockbrief-terraform-locks` |
 | GitHub OIDC provider | `token.actions.githubusercontent.com` |
-| GitHub deploy role | `stockbrief-dev-github-actions-deploy` |
+| GitHub deploy role | `stockbrief-<target_env>-github-actions-deploy` |
 
 Required GitHub repository variables:
 
 | Variable | Value |
 | --- | --- |
-| `AWS_DEV_DEPLOY_ROLE_ARN` | Deploy role ARN printed by the bootstrap script |
+| `AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` | Deploy role ARN printed by the bootstrap script |
 | `OPERATIONAL_ALARM_EMAILS_JSON` | JSON list of alarm recipient emails |
+| `TF_BACKEND_CONFIG_HCL` | Terraform backend HCL for the selected GitHub Environment |
+| `TFVARS_JSON` | Terraform variable JSON for the selected GitHub Environment |
+
+When building `TFVARS_JSON`, keep `amplify_cognito_redirect_uri` empty for the
+console-managed Amplify flow unless Terraform creates Amplify for that
+environment. Keep `agentcore_runtime_container_uri` empty unless
+`agentcore_runtime_enabled` is true and an AgentCore ECR image URI is ready.
 
 The workflow builds `dist/stockbrief-api-lambda.zip`, initializes Terraform with
-the S3 backend, plans with `envs/dev/deploy.auto.tfvars.json`, and applies the
-plan to dev.
+the selected S3 backend config, plans with the selected tfvars file, and applies
+the plan to the chosen profile.
 
-`AWS_DEV_DEPLOY_ROLE_ARN` and `OPERATIONAL_ALARM_EMAILS_JSON` can remain
-repository variables for the single dev environment. If staging or prod is added,
-move each environment's values into the matching GitHub Environment variables.
-Enable required reviewers on the `dev` environment only if the team wants manual
-approval before every dev apply.
+`AWS_DEV_DEPLOY_ROLE_ARN` remains supported for the default `dev` profile only.
+For rotating team accounts, prefer explicit variables such as
+`AWS_DEV_JUNWOO_DEPLOY_ROLE_ARN`. Move each environment's values into matching
+GitHub Environment variables if the team wants stricter separation. Enable
+required reviewers on dev environments only if the team wants manual approval
+before every apply.
 
 ## Current Limitations
 

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     database_host: str = Field(default="", validation_alias="DATABASE_HOST")
     database_port: int = Field(default=5432, validation_alias="DATABASE_PORT")
     database_name: str = Field(default="stockbrief", validation_alias="DATABASE_NAME")
+    database_sslmode: str = Field(default="require", validation_alias="DATABASE_SSLMODE")
     database_pool_size: int = Field(default=5, validation_alias="DATABASE_POOL_SIZE")
     database_max_overflow: int = Field(default=10, validation_alias="DATABASE_MAX_OVERFLOW")
     database_pool_recycle_seconds: int = Field(default=1800, validation_alias="DATABASE_POOL_RECYCLE_SECONDS")

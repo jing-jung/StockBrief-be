@@ -149,44 +149,62 @@ API Gateway, Cognito, Secrets Manager, and alarms are managed by Terraform.
 
 ## Deployment Flow After Bootstrap
 
-1. Merge backend changes into `main`.
-2. GitHub Actions runs `backend-dev-deploy` in the `dev` GitHub Environment.
-3. The workflow assumes `AWS_DEV_DEPLOY_ROLE_ARN` through OIDC.
-4. The workflow packages Lambda, runs Terraform plan, and applies the dev stack.
-5. Update Secrets Manager values outside git when keys or DB connection values
+1. Merge backend changes into `main`, or manually run `backend-dev-deploy`.
+2. GitHub Actions resolves a dev deploy profile. Pushes to `main` use
+   `target_env=dev`; manual runs can choose another dev profile such as
+   `dev-junwoo`. This workflow accepts only `dev` or `dev-*`; staging and prod
+   must use dedicated workflows.
+3. The workflow runs in the GitHub Environment named after `target_env`.
+4. The workflow assumes `AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` through OIDC. The
+   legacy `AWS_DEV_DEPLOY_ROLE_ARN` fallback is allowed only for `target_env=dev`.
+5. The workflow packages Lambda, initializes Terraform with
+   `backends/<target_env>.hcl`, plans with
+   `envs/<target_env>/deploy.auto.tfvars.json`, and applies the selected stack.
+   If those profile files are not committed, the workflow creates them at
+   runtime from the selected GitHub Environment variables
+   `TF_BACKEND_CONFIG_HCL` and `TFVARS_JSON`.
+6. Update Secrets Manager values outside git when keys or DB connection values
    change.
 
-Because `backend-dev-deploy` uses `environment: dev`, the OIDC trust policy uses
-this subject:
+Because `backend-dev-deploy` uses the selected GitHub Environment, the OIDC
+trust policy uses this subject pattern:
 
 ```text
-repo:80-hours-a-week/StockBrief-be:environment:dev
+repo:80-hours-a-week/StockBrief-be:environment:<target_env>
 ```
 
 The branch restriction is enforced by the GitHub Environment deployment branch
-policy. The bootstrap script configures the `dev` environment to allow only the
+policy. The bootstrap script configures the selected environment to allow only the
 `main` branch.
 
-The dev workflow uses `infra/terraform/backend.tf`, so it always targets the
-backend committed in that file. If a new environment needs a different backend,
-create a dedicated workflow or update the backend configuration in the same PR
-as the environment tfvars change.
+The dev workflow uses profile files instead of editing `backend.tf` for every
+handoff:
+
+```text
+infra/terraform/backends/<target_env>.hcl
+infra/terraform/envs/<target_env>/deploy.auto.tfvars.json
+```
+
+Add a profile pair before a team member account is eligible for manual deploy.
+For team member accounts, prefer storing the real profile body in GitHub
+Environment variables and letting the workflow create those files at runtime.
+Do not point two target environments at the same state key unless the team is
+intentionally sharing the same Terraform state.
 
 Before Terraform init, `backend-dev-deploy` compares the account assumed from
-`AWS_DEV_DEPLOY_ROLE_ARN` with the account encoded in the committed Terraform
+the resolved deploy role with the account encoded in the selected Terraform
 state bucket name. The workflow stops immediately if those accounts differ, so
 a repository variable update cannot accidentally deploy against a backend that
 still belongs to another AWS account.
 During account transition work, this failure is the expected guardrail when
-`AWS_DEV_DEPLOY_ROLE_ARN` has moved to a new account but `backend.tf` still
-points at the previous state bucket. Treat the failure as a configuration
-handoff signal, not as a deployment regression.
+`AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` points at one account but
+`backends/<target_env>.hcl` still points at another state bucket. Treat the
+failure as a configuration handoff signal, not as a deployment regression.
 
-`AWS_DEV_DEPLOY_ROLE_ARN` and `OPERATIONAL_ALARM_EMAILS_JSON` may live as
-repository variables or `dev` environment variables. Prefer environment
-variables when the repository has multiple deploy environments. Add GitHub
-Environment required reviewers later if the team wants manual approval before
-dev apply.
+`AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` and `OPERATIONAL_ALARM_EMAILS_JSON` may live
+as repository variables or environment variables. Prefer environment variables
+when the repository has multiple deploy environments. Add GitHub Environment
+required reviewers later if the team wants manual approval before dev apply.
 
 ## Dev Cost Pause And Resume Runbook
 
@@ -201,7 +219,7 @@ Before pausing, record the current target account and Terraform state:
 aws sts get-caller-identity --profile stockbrief-dev
 
 cd infra/terraform
-terraform init -reconfigure
+terraform init -reconfigure -backend-config=backends/dev.hcl
 terraform state list
 terraform output api_base_url
 terraform output ingestion_dlq_url
@@ -430,9 +448,10 @@ issue before deciding whether it is done.
 ## New Environment Checklist
 
 - Run the bootstrap script once in the target AWS account.
-- Update `infra/terraform/backend.tf` for that account and region.
-- Update `infra/terraform/envs/dev/deploy.auto.tfvars.json` for that network and
-  frontend URL.
+- Add or update `infra/terraform/backends/<target_env>.hcl` for that account and
+  region.
+- Add or update `infra/terraform/envs/<target_env>/deploy.auto.tfvars.json` for
+  that network, cost posture, and frontend URL.
 - Run `terraform init -reconfigure` or `terraform init -migrate-state` according
   to the backend change type.
 - Confirm `terraform state list` points to the intended environment before

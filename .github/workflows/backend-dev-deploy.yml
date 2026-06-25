@@ -4,11 +4,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Terraform deploy environment profile under infra/terraform/envs."
+        required: true
+        default: dev
+        type: string
 
 env:
   AWS_REGION: ap-northeast-2
   TF_DIR: infra/terraform
-  TF_VAR_FILE: envs/dev/deploy.auto.tfvars.json
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
@@ -23,19 +28,118 @@ jobs:
   deploy-dev:
     name: Deploy dev backend
     runs-on: ubuntu-latest
-    environment: dev
+    environment: ${{ github.event.inputs.target_env || 'dev' }}
     timeout-minutes: 35
+    env:
+      TARGET_ENV: ${{ github.event.inputs.target_env || 'dev' }}
     steps:
       - uses: actions/checkout@v6
 
+      - name: Resolve deploy profile
+        id: deploy-profile
+        env:
+          GITHUB_VARIABLES_JSON: ${{ toJson(vars) }}
+        run: |
+          python - <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+
+          target_env = os.environ["TARGET_ENV"]
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", target_env):
+              print(f"Invalid target_env: {target_env}", file=sys.stderr)
+              sys.exit(1)
+          if target_env != "dev" and not target_env.startswith("dev-"):
+              print(
+                  "backend-dev-deploy only accepts dev or dev-* target_env values. "
+                  f"Use a dedicated workflow for {target_env}.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          variables = json.loads(os.environ["GITHUB_VARIABLES_JSON"])
+          env_key = f"AWS_{target_env.upper().replace('-', '_')}_DEPLOY_ROLE_ARN"
+          role_arn = variables.get(env_key)
+          if not role_arn and target_env == "dev":
+              role_arn = variables.get("AWS_DEV_DEPLOY_ROLE_ARN")
+          if not role_arn:
+              print(f"Missing GitHub variable {env_key}.", file=sys.stderr)
+              sys.exit(1)
+
+          tf_var_file = f"envs/{target_env}/deploy.auto.tfvars.json"
+          tf_backend_config = f"backends/{target_env}.hcl"
+          tf_var_path = os.path.join(os.environ["TF_DIR"], tf_var_file)
+          tf_backend_path = os.path.join(os.environ["TF_DIR"], tf_backend_config)
+
+          if not os.path.isfile(tf_backend_path) or not os.path.isfile(tf_var_path):
+              backend_config_hcl = variables.get("TF_BACKEND_CONFIG_HCL")
+              tfvars_json = variables.get("TFVARS_JSON")
+              if not backend_config_hcl or not tfvars_json:
+                  print(
+                      "Missing deploy profile file(s), and GitHub Environment "
+                      "variables TF_BACKEND_CONFIG_HCL/TFVARS_JSON are not both set.",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              if "bucket" not in backend_config_hcl or "key" not in backend_config_hcl:
+                  print(
+                      "TF_BACKEND_CONFIG_HCL must include Terraform backend bucket and key.",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              try:
+                  parsed_tfvars = json.loads(tfvars_json)
+              except json.JSONDecodeError as exc:
+                  print(f"TFVARS_JSON is not valid JSON: {exc}", file=sys.stderr)
+                  sys.exit(1)
+              if not isinstance(parsed_tfvars, dict):
+                  print("TFVARS_JSON must be a JSON object.", file=sys.stderr)
+                  sys.exit(1)
+              if parsed_tfvars.get("environment") != target_env:
+                  print(
+                      "TFVARS_JSON environment must match target_env "
+                      f"({target_env}).",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+
+              os.makedirs(os.path.dirname(tf_backend_path), exist_ok=True)
+              os.makedirs(os.path.dirname(tf_var_path), exist_ok=True)
+              with open(tf_backend_path, "w", encoding="utf-8") as backend_file:
+                  backend_file.write(backend_config_hcl.rstrip() + "\n")
+              with open(tf_var_path, "w", encoding="utf-8") as tfvars_file:
+                  json.dump(parsed_tfvars, tfvars_file, ensure_ascii=False, indent=2)
+                  tfvars_file.write("\n")
+
+          required_files = [
+              tf_var_path,
+              tf_backend_path,
+          ]
+          missing_files = [path for path in required_files if not os.path.isfile(path)]
+          if missing_files:
+              print("Missing deploy profile file(s):", file=sys.stderr)
+              for path in missing_files:
+                  print(f"- {path}", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"target_env={target_env}")
+          print(f"tf_var_file={tf_var_file}")
+          print(f"tf_backend_config={tf_backend_config}")
+          print(f"deploy_role_arn={role_arn}")
+          PY
+
       - uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ steps.deploy-profile.outputs.deploy_role_arn }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify deploy account matches Terraform backend
         env:
-          DEPLOY_ROLE_ARN: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
+          DEPLOY_ROLE_ARN: ${{ steps.deploy-profile.outputs.deploy_role_arn }}
+          TF_BACKEND_CONFIG: ${{ steps.deploy-profile.outputs.tf_backend_config }}
         run: scripts/verify_deploy_account_matches_backend.sh
 
       - uses: actions/setup-python@v6
@@ -52,14 +156,17 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform init
-        run: terraform init -input=false
+        run: >-
+          terraform init
+          -input=false
+          -backend-config="${{ steps.deploy-profile.outputs.tf_backend_config }}"
         working-directory: ${{ env.TF_DIR }}
 
       - name: Terraform plan
         run: >-
           terraform plan
           -input=false
-          -var-file="${{ env.TF_VAR_FILE }}"
+          -var-file="${{ steps.deploy-profile.outputs.tf_var_file }}"
           -var='operational_alarm_email_addresses=${{ vars.OPERATIONAL_ALARM_EMAILS_JSON }}'
           -out=tfplan
         working-directory: ${{ env.TF_DIR }}
