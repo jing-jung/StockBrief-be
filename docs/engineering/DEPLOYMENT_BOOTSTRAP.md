@@ -396,14 +396,21 @@ Some services remain in the wildcard fallback statement because Terraform needs
 create, describe, or provider refresh APIs whose resource ARN is unknown before
 creation or not consistently supported by the AWS API. This currently includes
 API Gateway, Amplify, CloudFormation, Cognito, EC2 networking, KMS, RDS,
-CloudWatch alarm reads, log group creation/listing, SNS subscription cleanup,
-and STS caller identity.
+CloudWatch alarm reads, log group creation/listing, API Gateway access log
+delivery registration, SNS subscription cleanup, and STS caller identity.
 API Gateway stage creation can fail with an `apigateway:TagResource`
 AccessDenied error when Terraform applies tags to the `$default` stage, but
 Access Analyzer reports `apigateway:TagResource` and
 `apigateway:UntagResource` as invalid IAM actions. Keep the API Gateway
 management plane on `apigateway:*` in the fallback statement until AWS exposes
 an Analyzer-valid narrower action set that still covers stage tagging.
+HTTP API access logging also calls CloudWatch Logs delivery APIs such as
+`logs:CreateLogDelivery`, `logs:PutResourcePolicy`, and
+`logs:UpdateLogDelivery` while creating or updating
+`aws_apigatewayv2_stage.default`. AWS documents these logging activation
+permissions with `Resource: "*"`, so keep them in the fallback statement unless
+AWS exposes resource-level support that still works with API Gateway HTTP API
+access logs.
 
 PR #164 covers only the apply blocker found after the new dev account
 transition. It does not close #52 by itself. The `logs:TagResource` addition
@@ -439,8 +446,9 @@ Analyzer and resolve `ERROR` findings before applying it to the deploy role.
 After PR #164 merges, record on #52 that the bootstrap rerun updated the live
 deploy role inline policy, the new account/backend `backend-dev-deploy` run
 succeeded or failed with an expected guard, Terraform apply no longer fails on
-`logs:TagResource` or `rds!db-*` Secrets Manager permissions, and the
-`rds!db-*` exception remains part of the least-privilege tracking rationale.
+`logs:TagResource`, `logs:CreateLogDelivery`, or `rds!db-*` Secrets Manager
+permissions, and the `rds!db-*` exception remains part of the least-privilege
+tracking rationale.
 Keep the least-privilege hardening issue open until the bootstrap rerun and
 `backend-dev-deploy` verification are complete, then record the result on that
 issue before deciding whether it is done.

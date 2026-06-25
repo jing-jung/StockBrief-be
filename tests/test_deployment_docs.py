@@ -591,7 +591,14 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
         "ec2:AssociateRouteTable",
         "rds:CreateDBProxy",
         "logs:CreateLogGroup",
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:DescribeResourcePolicies",
+        "logs:GetLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
         "logs:TagResource",
+        "logs:UpdateLogDelivery",
         "cloudwatch:DescribeAlarms",
     ]:
         assert action in wildcard_actions
@@ -612,6 +619,10 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
     assert "`apigateway:TagResource`" in deployment_doc
     assert "`apigateway:UntagResource`" in deployment_doc
     assert "`apigateway:*`" in deployment_doc
+    assert "HTTP API access logging" in deployment_doc
+    assert "`logs:CreateLogDelivery`" in deployment_doc
+    assert "`logs:PutResourcePolicy`" in deployment_doc
+    assert "`logs:UpdateLogDelivery`" in deployment_doc
     assert "Analyzer-valid narrower action set" in deployment_doc
     assert "Prefer adding a narrow" in deployment_doc
     assert "PR #164 covers only the apply blocker" in deployment_doc
@@ -625,6 +636,7 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
     assert "live" in deployment_doc
     assert "deploy role inline policy" in deployment_doc
     assert "no longer fails on" in deployment_doc
+    assert "`logs:CreateLogDelivery`" in deployment_doc
     assert "`rds!db-*` exception remains part of the least-privilege" in deployment_doc
     assert "Keep the least-privilege hardening issue open" in deployment_doc
     assert "`backend-dev-deploy` verification are complete" in deployment_doc
