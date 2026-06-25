@@ -55,7 +55,9 @@ def get_preferences(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
-    preferences = _preference_row(session, current_user)
+    preferences = _find_preference_row(session, current_user)
+    if preferences is None:
+        return UserPreferencesResponse(preferences={})
     return UserPreferencesResponse(preferences=dict(preferences.preferences or {}))
 
 
@@ -66,7 +68,7 @@ def put_preferences(
     current_user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
     validated_preferences = _validated_preferences(request.preferences)
-    preferences = _preference_row(session, current_user)
+    preferences = _ensure_preference_row(session, current_user)
     preferences.preferences = validated_preferences
     session.commit()
     session.refresh(preferences)
@@ -306,14 +308,16 @@ def _me_response(user: User) -> MeResponse:
     )
 
 
-def _preference_row(session: Session, user: User) -> UserPreference:
-    row = session.scalars(select(UserPreference).where(UserPreference.user_id == user.id)).first()
+def _find_preference_row(session: Session, user: User) -> UserPreference | None:
+    return session.scalars(select(UserPreference).where(UserPreference.user_id == user.id)).first()
+
+
+def _ensure_preference_row(session: Session, user: User) -> UserPreference:
+    row = _find_preference_row(session, user)
     if row:
         return row
     row = UserPreference(user_id=user.id, preferences={})
     session.add(row)
-    session.commit()
-    session.refresh(row)
     return row
 
 

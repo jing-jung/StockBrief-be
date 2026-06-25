@@ -223,6 +223,7 @@ def test_get_and_patch_me_uses_cognito_sub_from_auth_context(
 
 def test_preferences_round_trip_for_authenticated_user(seeded_session: Session) -> None:
     client = _authenticated_client(seeded_session)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == "cognito-sub-1")).one()
     try:
         response = client.put(
             "/v1/me/preferences",
@@ -244,11 +245,65 @@ def test_preferences_round_trip_for_authenticated_user(seeded_session: Session) 
             "email_enabled": True,
             "watchlist_digest": "weekly",
         }
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).one()
+        assert preference_row.preferences["risk_profile"] == "balanced"
 
         get_response = client.get("/v1/me/preferences")
         assert get_response.status_code == 200
         assert get_response.json()["preferences"]["markets"] == ["KOSPI"]
         assert get_response.json()["preferences"]["notifications"]["watchlist_digest"] == "weekly"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_preferences_without_row_returns_empty_preferences_without_creating_row(
+    seeded_session: Session,
+) -> None:
+    user_sub = "preferences-read-only-user"
+    client = _authenticated_client(seeded_session, sub=user_sub)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == user_sub)).one()
+    try:
+        response = client.get("/v1/me/preferences")
+
+        assert response.status_code == 200
+        assert response.json()["preferences"] == {}
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).first()
+        assert preference_row is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_create_and_save_new_row_in_one_commit(
+    seeded_session: Session,
+    monkeypatch,
+) -> None:
+    user_sub = "single-commit-preferences-user"
+    client = _authenticated_client(seeded_session, sub=user_sub)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == user_sub)).one()
+    original_commit = seeded_session.commit
+    commits = {"count": 0}
+
+    def counted_commit() -> None:
+        commits["count"] += 1
+        original_commit()
+
+    monkeypatch.setattr(seeded_session, "commit", counted_commit)
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={"preferences": {"risk_profile": "aggressive"}},
+        )
+
+        assert response.status_code == 200
+        assert commits["count"] == 1
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).one()
+        assert preference_row.preferences == {"risk_profile": "aggressive"}
     finally:
         app.dependency_overrides.clear()
 
@@ -306,6 +361,10 @@ def test_preferences_reject_invalid_request_without_creating_empty_row(
         get_response = client.get("/v1/me/preferences")
         assert get_response.status_code == 200
         assert get_response.json()["preferences"] == {}
+        preference_row_after_get = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).first()
+        assert preference_row_after_get is None
     finally:
         app.dependency_overrides.clear()
 
