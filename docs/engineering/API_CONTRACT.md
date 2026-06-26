@@ -334,3 +334,100 @@ Response `data`:
   }
 }
 ```
+
+## 10. Authenticated Account Endpoints
+
+These endpoints require the Cognito JWT authorizer or the local test auth
+override. They are scoped to the current user.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/v1/me` | Current user profile |
+| `PATCH` | `/v1/me` | Update current user profile |
+| `GET` | `/v1/me/preferences` | Current user preferences |
+| `PUT` | `/v1/me/preferences` | Replace current user preferences |
+| `GET` | `/v1/me/watchlist` | Current user watchlist |
+| `POST` | `/v1/me/watchlist` | Add a watchlist item |
+| `PATCH` | `/v1/me/watchlist/{ticker}` | Update a watchlist item |
+| `DELETE` | `/v1/me/watchlist/{ticker}` | Remove a watchlist item |
+| `POST` | `/v1/me/watchlist/import` | Merge guest watchlist items into the server watchlist |
+| `GET` | `/v1/me/chat-sessions` | List current user chat sessions |
+| `POST` | `/v1/me/chat-sessions` | Create an empty current user chat session |
+| `GET` | `/v1/me/chat-sessions/{session_id}` | Read current user chat session messages |
+
+`PUT /v1/me/preferences` stores the current user's product preferences. Unknown
+preference keys are preserved for forward compatibility, but known keys are
+validated:
+
+- `risk_profile`: `conservative`, `balanced`, or `aggressive`
+- `notifications.email_enabled`: boolean
+- `notifications.watchlist_digest`: `off`, `daily`, or `weekly`
+
+When any known preference key above is present, `null` is rejected as invalid.
+
+Request:
+
+```json
+{
+  "preferences": {
+    "risk_profile": "balanced",
+    "markets": ["KOSPI"],
+    "notifications": {
+      "email_enabled": true,
+      "watchlist_digest": "weekly"
+    }
+  }
+}
+```
+
+Invalid known preference values return `400 INVALID_PREFERENCES` with field-level
+details.
+
+`GET /v1/me/chat-sessions/{session_id}` returns `404 CHAT_SESSION_NOT_FOUND`
+when the session does not exist or belongs to another user.
+
+Response:
+
+```json
+{
+  "session": {
+    "session_id": "chat_20260624_001",
+    "ticker": "005930",
+    "title": "삼성전자 설명",
+    "created_at": "2026-06-24T09:00:00Z",
+    "updated_at": "2026-06-24T09:05:00Z"
+  },
+  "messages": [
+    {
+      "message_id": "msg_20260624_001",
+      "role": "user",
+      "content": "왜 추천됐나요?",
+      "ticker": "005930",
+      "citations": [],
+      "safety_flags": [],
+      "created_at": "2026-06-24T09:00:01Z"
+    },
+    {
+      "message_id": "msg_20260624_002",
+      "role": "assistant",
+      "content": "공개 데이터 기준 설명입니다.",
+      "ticker": "005930",
+      "citations": [
+        {
+          "evidence_id": "ev_mock_005930_news",
+          "type": "news",
+          "title": "[MOCK NEWS] 삼성전자 산업 동향 데모 기사",
+          "source_url": "https://mock.stockbrief.local/naver-news/005930",
+          "published_at": "2026-06-08T09:00:00Z"
+        }
+      ],
+      "safety_flags": [
+        {
+          "policy_status": "allowed"
+        }
+      ],
+      "created_at": "2026-06-24T09:00:02Z"
+    }
+  ]
+}
+```

@@ -230,18 +230,20 @@ def _system_prompt() -> str:
 
 def _user_prompt(*, request: ChatProviderInput, baseline: ChatResponse) -> str:
     candidate = request.candidate
+    citable_evidence = _citable_evidence(request=request, baseline=baseline)
+    allowed_citation_ids = set(_citation_ids(baseline.citations))
     evidence_lines = [
         (
             f"- id={item.id}; type={item.type}; title={item.title}; "
             f"summary={item.summary}; source={item.source_name}; "
             f"published_at={item.published_at}; as_of_date={item.as_of_date}"
         )
-        for item in request.evidence[:6]
+        for item in citable_evidence
     ]
     reason_lines = [
         (
             f"- component={reason.component}; summary={reason.summary}; "
-            f"evidence_ids={', '.join(reason.evidence_ids)}"
+            f"evidence_ids={_reason_evidence_ids(reason.evidence_ids, allowed_citation_ids)}"
         )
         for reason in candidate.recommendation_reasons[:4]
     ]
@@ -261,11 +263,37 @@ def _user_prompt(*, request: ChatProviderInput, baseline: ChatResponse) -> str:
             "\n".join(reason_lines) or "- none",
             "Evidence:",
             "\n".join(evidence_lines) or "- none",
-            f"Required citation IDs to prefer: {citation_hint}",
+            f"Allowed citation IDs: {citation_hint}",
             "Draft a concise Korean explanation in 4-7 sentences. "
-            "Focus on evidence-based review points and avoid unsupported conclusions.",
+            "Focus on evidence-based review points and avoid unsupported conclusions. "
+            "Cite only the allowed citation IDs shown above.",
         ]
     )
+
+
+def _citable_evidence(
+    *,
+    request: ChatProviderInput,
+    baseline: ChatResponse,
+) -> list[StockEvidenceItemResponse]:
+    evidence_by_id = {item.id: item for item in request.evidence}
+    seen: set[str] = set()
+    citable_evidence: list[StockEvidenceItemResponse] = []
+    for citation in baseline.citations:
+        evidence_id = citation.evidence_id
+        if evidence_id not in evidence_by_id or evidence_id in seen:
+            continue
+        seen.add(evidence_id)
+        citable_evidence.append(evidence_by_id[evidence_id])
+    return citable_evidence
+
+
+def _reason_evidence_ids(
+    evidence_ids: list[str],
+    allowed_citation_ids: set[str],
+) -> str:
+    filtered = [evidence_id for evidence_id in evidence_ids if evidence_id in allowed_citation_ids]
+    return ", ".join(filtered) or "none"
 
 
 def _citation_ids(citations: list[ChatCitation]) -> list[str]:

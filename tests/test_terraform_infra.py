@@ -10,6 +10,30 @@ def _read(path: str) -> str:
     return (TERRAFORM_ROOT / path).read_text(encoding="utf-8")
 
 
+def test_multi_account_dev_profile_templates_are_available() -> None:
+    variables_tf = _read("variables.tf")
+    dev_backend = _read("backends/dev.hcl")
+    template_backend = _read("backends/dev-template.hcl.example")
+    template_tfvars = json.loads(_read("envs/dev-template/deploy.auto.tfvars.json.example"))
+
+    assert "dev-<member>" in variables_tf
+    assert 'regex("^dev-[a-z0-9][a-z0-9-]*$"' in variables_tf
+    assert 'bucket         = "stockbrief-terraform-state-217139788460-ap-northeast-2"' in dev_backend
+    assert 'key            = "stockbrief/dev/terraform.tfstate"' in dev_backend
+    assert "REPLACE_WITH_ACCOUNT_ID" in template_backend
+    assert "REPLACE_WITH_TARGET_ENV" in template_backend
+    assert not (TERRAFORM_ROOT / "backends/dev-junwoo.hcl").exists()
+    assert not (TERRAFORM_ROOT / "envs/dev-junwoo/deploy.auto.tfvars.json").exists()
+    assert template_tfvars["environment"] == "REPLACE_WITH_TARGET_ENV"
+    assert template_tfvars["enable_amplify"] is False
+    assert template_tfvars["enable_lambda_nat_egress"] is False
+    assert template_tfvars["enable_ingestion_scheduler"] is False
+    assert template_tfvars["enable_rds_proxy"] is False
+    assert template_tfvars["db_deletion_protection"] is False
+    assert template_tfvars["db_skip_final_snapshot"] is True
+    assert template_tfvars["vpc_id"] == "REPLACE_WITH_VPC_ID"
+
+
 def test_amplify_module_targets_frontend_repository_root() -> None:
     main_tf = _read("modules/amplify/main.tf")
 
@@ -88,17 +112,62 @@ def test_new_aws_bootstrap_does_not_pin_old_dev_account() -> None:
     backend_tf = _read("backend.tf")
     deploy_tfvars = _read("envs/dev/deploy.auto.tfvars.json")
 
+    assert "560271561793" not in backend_tf
+    assert "560271561793" not in deploy_tfvars
     assert "420615923610" not in backend_tf
     assert "420615923610" not in deploy_tfvars
     assert "REPLACE_WITH_ACCOUNT_ID" not in backend_tf
-    assert "stockbrief-terraform-state-" in backend_tf
+    assert "stockbrief-terraform-state-217139788460-ap-northeast-2" in backend_tf
     assert "vpc-0fdabc1f990027c99" not in deploy_tfvars
     assert "subnet-08f5ab10f709efd3e" not in deploy_tfvars
     assert "subnet-0940fc5ef61437e6d" not in deploy_tfvars
-    assert '"vpc_id": "vpc-07b9f3920d93b65e1"' in deploy_tfvars
-    assert "subnet-08d89333a3c3e2924" in deploy_tfvars
-    assert "subnet-0e10680a556fa9ca8" in deploy_tfvars
-    assert "rtb-01a4330966a81395a" in deploy_tfvars
+    assert '"vpc_id": "vpc-03b24c84216090769"' in deploy_tfvars
+    assert "subnet-048cb5abccdf777d1" in deploy_tfvars
+    assert "subnet-04a3c75b6a6ba6b99" in deploy_tfvars
+    assert "rtb-0de4e4c9b811cd39c" in deploy_tfvars
+
+
+def test_dev_deploy_tfvars_documents_low_cost_local_only_bootstrap() -> None:
+    deploy_tfvars = json.loads(_read("envs/dev/deploy.auto.tfvars.json"))
+    terraform_readme = _read("README.md")
+
+    assert deploy_tfvars["enable_amplify"] is False
+    assert deploy_tfvars["amplify_cognito_redirect_uri"] == ""
+    assert deploy_tfvars["agentcore_runtime_enabled"] is False
+    assert deploy_tfvars["agentcore_runtime_container_uri"] == ""
+    assert "amplifyapp.com" not in deploy_tfvars["cors_allowed_origins"]
+    assert all("amplifyapp.com" not in url for url in deploy_tfvars["cognito_callback_urls"])
+    assert all("amplifyapp.com" not in url for url in deploy_tfvars["cognito_logout_urls"])
+    assert "low-cost," in terraform_readme
+    assert "local-only bootstrap posture" in terraform_readme
+    assert "track the callback, logout, and CORS change through" in terraform_readme
+    assert "#162" in terraform_readme
+    assert "keep `amplify_cognito_redirect_uri` empty" in terraform_readme
+    assert "Keep `agentcore_runtime_container_uri` empty" in terraform_readme
+
+
+def test_dev_account_transition_requires_backend_deploy_result_on_issue_52() -> None:
+    terraform_readme = _read("README.md")
+
+    assert "After a dev backend/account transition PR merges" in terraform_readme
+    assert "run `backend-dev-deploy`" in terraform_readme
+    assert "record the success or expected guard failure on #52" in terraform_readme
+
+
+def test_dev_live_ingestion_enablement_is_tracked_after_low_cost_bootstrap() -> None:
+    deploy_tfvars = json.loads(_read("envs/dev/deploy.auto.tfvars.json"))
+    terraform_readme = _read("README.md")
+
+    assert deploy_tfvars["enable_lambda_nat_egress"] is False
+    assert deploy_tfvars["lambda_nat_public_subnet_id"] == ""
+    assert deploy_tfvars["lambda_nat_route_subnet_ids"] == []
+    assert deploy_tfvars["enable_ingestion_scheduler"] is False
+    assert deploy_tfvars["ingestion_schedule_jobs"] == []
+    assert "For PR #161" in terraform_readme
+    assert "NAT egress and EventBridge Scheduler stay intentionally" in terraform_readme
+    assert "Track live ingestion" in terraform_readme
+    assert "cost approval" in terraform_readme
+    assert "runbook smoke evidence through #163" in terraform_readme
 
 
 def test_agentcore_runtime_module_uses_cloudformation_resources() -> None:
@@ -228,19 +297,8 @@ def test_ingestion_pipeline_resources_are_wired_with_scheduler_disabled_by_defau
     assert 'output "ingestion_dlq_url"' in outputs_tf
     assert 'output "ingestion_scheduler_names"' in outputs_tf
     assert "enable_ingestion_scheduler          = false" in dev_tfvars
-    assert deploy_tfvars["enable_ingestion_scheduler"] is True
-    assert deploy_tfvars["ingestion_schedule_jobs"] == [
-        {
-            "provider": "OpenDART",
-            "tickers": ["005930"],
-            "schedule_expression": "cron(0 18 ? * MON-FRI *)",
-        },
-        {
-            "provider": "NAVER_NEWS",
-            "tickers": ["005930"],
-            "schedule_expression": "cron(0 18 ? * MON-FRI *)",
-        },
-    ]
+    assert deploy_tfvars["enable_ingestion_scheduler"] is False
+    assert deploy_tfvars["ingestion_schedule_jobs"] == []
 
 
 def test_lambda_nat_egress_is_toggleable_and_disabled_by_default() -> None:

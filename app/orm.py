@@ -399,7 +399,10 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
-    __table_args__ = (UniqueConstraint("message_id", name="uq_chat_messages_message_id"),)
+    __table_args__ = (
+        UniqueConstraint("message_id", name="uq_chat_messages_message_id"),
+        Index("ix_chat_messages_session_id", "session_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid_pk)
     message_id: Mapped[str] = mapped_column(Text, nullable=False)

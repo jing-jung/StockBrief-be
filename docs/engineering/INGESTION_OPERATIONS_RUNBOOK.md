@@ -46,11 +46,10 @@ payloads into PR comments, shared logs, or issue comments.
 - Lambda has outbound internet egress for OpenDART and NAVER. Verify it from the
   Lambda runtime after the readiness check:
 
-  For the current dev AWS account, this requires
-  `enable_lambda_nat_egress = true`,
-  `lambda_nat_public_subnet_id = "subnet-0c816842b11dfd2e7"`, and
-  `lambda_nat_route_subnet_ids = ["subnet-08d89333a3c3e2924",
-  "subnet-0e10680a556fa9ca8"]` in
+  NAT is intentionally disabled in the low-cost dev bootstrap. Before live
+  provider ingestion, set `enable_lambda_nat_egress = true`, choose a public
+  subnet for `lambda_nat_public_subnet_id`, and set
+  `lambda_nat_route_subnet_ids` to the Lambda private subnets in
   `infra/terraform/envs/dev/deploy.auto.tfvars.json`. The NAT public subnet must
   not be included in the route subnet list.
 

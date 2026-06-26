@@ -155,6 +155,10 @@ Provider configuration:
   policy status from the local composer, and fail closed with
   `CHAT_PROVIDER_UNAVAILABLE` if Bedrock is unavailable, returns an empty answer,
   or emits prohibited financial wording.
+- Bedrock prompt context must include only the evidence IDs that the local
+  composer selected as allowed citations. Evidence returned by the API but not
+  selected for citation should stay out of the model prompt so the citation guard
+  and model context use the same grounding boundary.
 - Do not silently fall back from Bedrock to mock in production-like validation.
   A Bedrock provider failure should be visible as an upstream provider error so
   operators can distinguish model/runtime issues from deterministic mock output.

@@ -10,7 +10,7 @@ Creates or updates:
   - DynamoDB Terraform lock table
   - GitHub Actions OIDC provider
   - GitHub Actions deploy IAM role
-  - GitHub repository variables used by backend-dev-deploy.yml
+  - GitHub Environment variables used by backend-dev-deploy.yml
 
 Example:
   scripts/bootstrap_github_oidc.sh \
@@ -165,6 +165,7 @@ repo_full_name="${github_owner}/${github_repo}"
 oidc_provider_url="token.actions.githubusercontent.com"
 oidc_provider_arn="arn:aws:iam::${account_id}:oidc-provider/${oidc_provider_url}"
 role_arn="arn:aws:iam::${account_id}:role/${role_name}"
+resource_name_prefix="stockbrief-${environment}"
 env_upper="$(printf '%s' "$environment" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
 deploy_role_var="AWS_${env_upper}_DEPLOY_ROLE_ARN"
 
@@ -268,7 +269,7 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "s3:GetEncryptionConfiguration",
         "s3:GetObject",
         "s3:ListBucket",
-        "s3:PutBucketEncryption",
+        "s3:PutEncryptionConfiguration",
         "s3:PutBucketPublicAccessBlock",
         "s3:PutBucketVersioning",
         "s3:PutObject",
@@ -292,14 +293,216 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
       "Resource": "arn:aws:dynamodb:${region}:${account_id}:table/${lock_table}"
     },
     {
-      "Sid": "DevBackendDeployment",
+      "Sid": "DeployIamRolesByPrefix",
       "Effect": "Allow",
       "Action": [
-        "apigateway:DELETE",
-        "apigateway:GET",
-        "apigateway:PATCH",
-        "apigateway:POST",
-        "apigateway:PUT",
+        "iam:AttachRolePolicy",
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::${account_id}:role/${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DeployPassRolesByPrefix",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${account_id}:role/${resource_name_prefix}-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "bedrock-agentcore.amazonaws.com",
+            "lambda.amazonaws.com",
+            "rds.amazonaws.com",
+            "scheduler.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DeployAwsManagedPolicyRead",
+      "Effect": "Allow",
+      "Action": "iam:GetPolicy",
+      "Resource": [
+        "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+        "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+      ]
+    },
+    {
+      "Sid": "DeployLambdaFunctionByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:AddPermission",
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:GetPolicy",
+        "lambda:ListTags",
+        "lambda:ListVersionsByFunction",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": "arn:aws:lambda:${region}:${account_id}:function:${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DeployLogGroupsByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DeleteLogGroup",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/amplify/${resource_name_prefix}-web",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/amplify/${resource_name_prefix}-web:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/apigateway/${resource_name_prefix}-http-api",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/apigateway/${resource_name_prefix}-http-api:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/${resource_name_prefix}-api",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/${resource_name_prefix}-api:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres:*"
+      ]
+    },
+    {
+      "Sid": "DeployCloudWatchAlarmsByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:${region}:${account_id}:alarm:${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DeployIngestionRawBucketByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:DeleteBucketWebsite",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketAcl",
+        "s3:GetBucketCors",
+        "s3:GetBucketLocation",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketOwnershipControls",
+        "s3:GetBucketPolicy",
+        "s3:GetBucketPolicyStatus",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketTagging",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketWebsite",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutBucketTagging",
+        "s3:PutBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutLifecycleConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${resource_name_prefix}-raw-${account_id}-${region}",
+        "arn:aws:s3:::${resource_name_prefix}-raw-${account_id}-${region}/*"
+      ]
+    },
+    {
+      "Sid": "DeploySchedulesByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "scheduler:CreateSchedule",
+        "scheduler:DeleteSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:ListTagsForResource",
+        "scheduler:TagResource",
+        "scheduler:UntagResource",
+        "scheduler:UpdateSchedule"
+      ],
+      "Resource": "arn:aws:scheduler:${region}:${account_id}:schedule/default/${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DeploySecretsByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:ListSecretVersionIds",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+        "secretsmanager:UpdateSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:${region}:${account_id}:secret:${resource_name_prefix}/*"
+    },
+    {
+      "Sid": "DeployRdsManagedMasterUserSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:${region}:${account_id}:secret:rds!db-*"
+    },
+    {
+      "Sid": "DeploySnsTopicsByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:ListTagsForResource",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:TagResource",
+        "sns:UntagResource"
+      ],
+      "Resource": "arn:aws:sns:${region}:${account_id}:${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DeploySqsQueuesByPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:ListQueueTags",
+        "sqs:SetQueueAttributes",
+        "sqs:TagQueue",
+        "sqs:UntagQueue"
+      ],
+      "Resource": "arn:aws:sqs:${region}:${account_id}:${resource_name_prefix}-*"
+    },
+    {
+      "Sid": "DevBackendDeploymentWildcardFallback",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:*",
         "amplify:CreateApp",
         "amplify:CreateBranch",
         "amplify:DeleteApp",
@@ -319,12 +522,7 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "cloudformation:ListStackResources",
         "cloudformation:UpdateStack",
         "cloudformation:ValidateTemplate",
-        "cloudwatch:DeleteAlarms",
         "cloudwatch:DescribeAlarms",
-        "cloudwatch:ListTagsForResource",
-        "cloudwatch:PutMetricAlarm",
-        "cloudwatch:TagResource",
-        "cloudwatch:UntagResource",
         "cognito-idp:CreateUserPool",
         "cognito-idp:CreateUserPoolClient",
         "cognito-idp:CreateUserPoolDomain",
@@ -377,35 +575,6 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "ec2:ReplaceRoute",
         "ec2:RevokeSecurityGroupEgress",
         "ec2:RevokeSecurityGroupIngress",
-        "iam:AttachRolePolicy",
-        "iam:CreateRole",
-        "iam:DeleteRole",
-        "iam:DeleteRolePolicy",
-        "iam:DetachRolePolicy",
-        "iam:GetPolicy",
-        "iam:GetRole",
-        "iam:GetRolePolicy",
-        "iam:ListAttachedRolePolicies",
-        "iam:ListRolePolicies",
-        "iam:ListRoleTags",
-        "iam:PassRole",
-        "iam:PutRolePolicy",
-        "iam:TagRole",
-        "iam:UntagRole",
-        "iam:UpdateAssumeRolePolicy",
-        "lambda:AddPermission",
-        "lambda:CreateFunction",
-        "lambda:DeleteFunction",
-        "lambda:GetFunction",
-        "lambda:GetFunctionCodeSigningConfig",
-        "lambda:GetPolicy",
-        "lambda:ListTags",
-        "lambda:ListVersionsByFunction",
-        "lambda:RemovePermission",
-        "lambda:TagResource",
-        "lambda:UntagResource",
-        "lambda:UpdateFunctionCode",
-        "lambda:UpdateFunctionConfiguration",
         "kms:CreateAlias",
         "kms:CreateKey",
         "kms:DeleteAlias",
@@ -421,12 +590,15 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "kms:UntagResource",
         "kms:UpdateAlias",
         "logs:CreateLogGroup",
-        "logs:DeleteLogGroup",
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
         "logs:DescribeLogGroups",
-        "logs:ListTagsForResource",
-        "logs:PutRetentionPolicy",
+        "logs:DescribeResourcePolicies",
+        "logs:GetLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
         "logs:TagResource",
-        "logs:UntagResource",
+        "logs:UpdateLogDelivery",
         "rds:AddTagsToResource",
         "rds:CreateDBInstance",
         "rds:CreateDBProxy",
@@ -446,71 +618,8 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "rds:ModifyDBProxyTargetGroup",
         "rds:RegisterDBProxyTargets",
         "rds:RemoveTagsFromResource",
-        "s3:CreateBucket",
-        "s3:DeleteBucket",
-        "s3:DeleteBucketEncryption",
-        "s3:DeleteBucketPublicAccessBlock",
-        "s3:DeleteBucketTagging",
-        "s3:DeleteBucketWebsite",
-        "s3:DeleteLifecycleConfiguration",
-        "s3:GetAccelerateConfiguration",
-        "s3:GetBucketAcl",
-        "s3:GetBucketCors",
-        "s3:GetBucketLocation",
-        "s3:GetBucketLogging",
-        "s3:GetBucketObjectLockConfiguration",
-        "s3:GetBucketOwnershipControls",
-        "s3:GetBucketPolicy",
-        "s3:GetBucketPolicyStatus",
-        "s3:GetBucketPublicAccessBlock",
-        "s3:GetBucketRequestPayment",
-        "s3:GetBucketTagging",
-        "s3:GetBucketVersioning",
-        "s3:GetBucketWebsite",
-        "s3:GetEncryptionConfiguration",
-        "s3:GetLifecycleConfiguration",
-        "s3:GetReplicationConfiguration",
-        "s3:ListBucket",
-        "s3:PutBucketPublicAccessBlock",
-        "s3:PutBucketTagging",
-        "s3:PutBucketVersioning",
-        "s3:PutEncryptionConfiguration",
-        "s3:PutLifecycleConfiguration",
-        "scheduler:CreateSchedule",
-        "scheduler:DeleteSchedule",
-        "scheduler:GetSchedule",
-        "scheduler:ListTagsForResource",
-        "scheduler:TagResource",
-        "scheduler:UntagResource",
-        "scheduler:UpdateSchedule",
-        "secretsmanager:CreateSecret",
-        "secretsmanager:DeleteSecret",
-        "secretsmanager:DescribeSecret",
-        "secretsmanager:GetResourcePolicy",
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:ListSecretVersionIds",
-        "secretsmanager:PutSecretValue",
-        "secretsmanager:TagResource",
-        "secretsmanager:UntagResource",
-        "secretsmanager:UpdateSecret",
-        "sns:CreateTopic",
-        "sns:DeleteTopic",
         "sns:GetSubscriptionAttributes",
-        "sns:GetTopicAttributes",
-        "sns:ListSubscriptionsByTopic",
-        "sns:ListTagsForResource",
-        "sns:SetTopicAttributes",
-        "sns:Subscribe",
-        "sns:TagResource",
         "sns:Unsubscribe",
-        "sns:UntagResource",
-        "sqs:CreateQueue",
-        "sqs:DeleteQueue",
-        "sqs:GetQueueAttributes",
-        "sqs:ListQueueTags",
-        "sqs:SetQueueAttributes",
-        "sqs:TagQueue",
-        "sqs:UntagQueue",
         "sts:GetCallerIdentity"
       ],
       "Resource": "*"
@@ -603,14 +712,9 @@ ${obsolete_branch_policies}
 EOF
 fi
 
-echo "Setting GitHub repository variables on ${repo_full_name}"
-run_change gh variable set "$deploy_role_var" --repo "$repo_full_name" --body "$role_arn"
-
-if [ "$deploy_role_var" != "AWS_DEV_DEPLOY_ROLE_ARN" ] && [ "$environment" = "dev" ]; then
-  run_change gh variable set AWS_DEV_DEPLOY_ROLE_ARN --repo "$repo_full_name" --body "$role_arn"
-fi
-
-run_change gh variable set OPERATIONAL_ALARM_EMAILS_JSON --repo "$repo_full_name" --body "$alarm_emails_json"
+echo "Setting GitHub Environment variables on ${repo_full_name}/${environment}"
+run_change gh variable set "$deploy_role_var" --repo "$repo_full_name" --env "$environment" --body "$role_arn"
+run_change gh variable set OPERATIONAL_ALARM_EMAILS_JSON --repo "$repo_full_name" --env "$environment" --body "$alarm_emails_json"
 
 cat <<SUMMARY
 
@@ -622,7 +726,7 @@ Terraform backend:
   region         = "${region}"
   dynamodb_table = "${lock_table}"
 
-GitHub variables:
+GitHub Environment variables (${environment}):
   ${deploy_role_var}=${role_arn}
   OPERATIONAL_ALARM_EMAILS_JSON=<configured JSON array>
 

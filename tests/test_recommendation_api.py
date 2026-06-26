@@ -4,9 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
-from sqlalchemy import event
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 from sqlalchemy.orm import Session
 
 from app.orm import EvidenceChunk, RecommendationScore, SourceDocument

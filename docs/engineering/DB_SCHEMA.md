@@ -416,6 +416,7 @@ Stores user and assistant chat messages with safety metadata.
 - Index `recommendation_scores(as_of_date, is_candidate_eligible, total_score desc)`.
 - Index `evidence_chunks(ticker, evidence_type)`.
 - Index `risk_signals(ticker, as_of)`.
+- Index `chat_messages(session_id)` for authenticated chat session detail reads.
 - Index `ingestion_runs(job_type, provider, status)`.
 - Index `ingestion_runs(started_at)`.
 

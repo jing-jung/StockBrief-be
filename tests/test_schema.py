@@ -1,10 +1,18 @@
 from datetime import date
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
-from app.orm import Base, CompanyIdentifier, IngestionRun, RecommendationScore, User, Watchlist
+from app.orm import (
+    Base,
+    ChatMessage,
+    CompanyIdentifier,
+    IngestionRun,
+    RecommendationScore,
+    User,
+    Watchlist,
+)
 
 API_ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,6 +101,34 @@ def test_ingestion_runs_schema_is_declared() -> None:
     assert "uq_ingestion_runs_active_input_hash" in indexes
 
 
+def test_chat_messages_session_id_index_is_declared() -> None:
+    indexes = {index.name for index in ChatMessage.__table__.indexes}
+
+    assert "ix_chat_messages_session_id" in indexes
+
+
+def test_create_all_builds_chat_messages_session_id_index() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    indexes = {index["name"] for index in inspector.get_indexes("chat_messages")}
+    assert "ix_chat_messages_session_id" in indexes
+
+
+def test_chat_message_session_lookup_plan_uses_session_id_index() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with engine.connect() as connection:
+        plan = connection.execute(
+            text("EXPLAIN QUERY PLAN SELECT * FROM chat_messages WHERE session_id = 'chat-1'")
+        ).fetchall()
+
+    plan_text = " ".join(str(column) for row in plan for column in row)
+    assert "ix_chat_messages_session_id" in plan_text
+
+
 def test_ingestion_runs_migration_creates_table() -> None:
     migration = (API_ROOT / "migrations/versions/0003_ingestion_runs.py").read_text()
     input_hash_guard_migration = (
@@ -106,6 +142,19 @@ def test_ingestion_runs_migration_creates_table() -> None:
     assert "status IN ('started', 'succeeded')" in input_hash_guard_migration
     assert "Cannot create uq_ingestion_runs_active_input_hash" in input_hash_guard_migration
     assert "having count(*) > 1" in input_hash_guard_migration
+
+
+def test_chat_messages_session_id_index_migration_is_declared() -> None:
+    migration = (
+        API_ROOT / "migrations/versions/0005_chat_messages_session_id_index.py"
+    ).read_text()
+
+    assert "ix_chat_messages_session_id" in migration
+    assert '"chat_messages"' in migration
+    assert '"session_id"' in migration
+    assert 'context.dialect.name == "postgresql"' in migration
+    assert "context.autocommit_block()" in migration
+    assert "postgresql_concurrently=True" in migration
 
 
 def test_db_schema_documents_input_hash_migration_precheck() -> None:

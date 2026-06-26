@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -19,12 +19,14 @@ from app.models import (
     ServerWatchlistItemUpdateRequest,
     ServerWatchlistResponse,
     UserChatSessionCreateRequest,
+    UserChatSessionDetailResponse,
     UserChatSessionListResponse,
+    UserChatMessageResponse,
     UserChatSessionResponse,
     UserPreferencesResponse,
     UserPreferencesUpdateRequest,
 )
-from app.orm import ChatSession, Stock, User, UserPreference, Watchlist
+from app.orm import ChatMessage, ChatSession, Stock, User, UserPreference, Watchlist
 from app.ticker import validate_ticker
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -53,7 +55,9 @@ def get_preferences(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
-    preferences = _preference_row(session, current_user)
+    preferences = _find_preference_row(session, current_user)
+    if preferences is None:
+        return UserPreferencesResponse(preferences={})
     return UserPreferencesResponse(preferences=dict(preferences.preferences or {}))
 
 
@@ -63,8 +67,9 @@ def put_preferences(
     session: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> UserPreferencesResponse:
-    preferences = _preference_row(session, current_user)
-    preferences.preferences = request.preferences
+    validated_preferences = _validated_preferences(request.preferences)
+    preferences = _ensure_preference_row(session, current_user)
+    preferences.preferences = validated_preferences
     session.commit()
     session.refresh(preferences)
     return UserPreferencesResponse(preferences=dict(preferences.preferences or {}))
@@ -252,6 +257,47 @@ def create_chat_session(
     return _chat_session_response(row)
 
 
+@router.get("/chat-sessions/{session_id}", response_model=UserChatSessionDetailResponse)
+def get_chat_session_detail(
+    session_id: str,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+) -> UserChatSessionDetailResponse:
+    row = session.scalars(
+        select(ChatSession).where(
+            ChatSession.session_id == session_id,
+            ChatSession.user_id == current_user.id,
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "CHAT_SESSION_NOT_FOUND",
+                "message": "Chat session was not found.",
+            },
+        )
+
+    role_order = case(
+        (ChatMessage.role == "user", 0),
+        (ChatMessage.role == "assistant", 1),
+        else_=2,
+    )
+    messages = session.scalars(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == row.session_id)
+        .order_by(
+            ChatMessage.created_at.asc(),
+            role_order.asc(),
+            ChatMessage.message_id.asc(),
+        )
+    ).all()
+    return UserChatSessionDetailResponse(
+        session=_chat_session_response(row),
+        messages=[_chat_message_response(message) for message in messages],
+    )
+
+
 def _me_response(user: User) -> MeResponse:
     return MeResponse(
         id=str(user.id),
@@ -262,15 +308,63 @@ def _me_response(user: User) -> MeResponse:
     )
 
 
-def _preference_row(session: Session, user: User) -> UserPreference:
-    row = session.scalars(select(UserPreference).where(UserPreference.user_id == user.id)).first()
+def _find_preference_row(session: Session, user: User) -> UserPreference | None:
+    return session.scalars(select(UserPreference).where(UserPreference.user_id == user.id)).first()
+
+
+def _ensure_preference_row(session: Session, user: User) -> UserPreference:
+    row = _find_preference_row(session, user)
     if row:
         return row
     row = UserPreference(user_id=user.id, preferences={})
     session.add(row)
-    session.commit()
-    session.refresh(row)
     return row
+
+
+def _validated_preferences(preferences: dict[str, object]) -> dict[str, object]:
+    issues: list[dict[str, str]] = []
+    valid_risk_profiles = {"conservative", "balanced", "aggressive"}
+    if "risk_profile" in preferences:
+        risk_profile = preferences["risk_profile"]
+        if risk_profile not in valid_risk_profiles:
+            issues.append({"field": "preferences.risk_profile", "reason": "invalid_value"})
+
+    if "notifications" in preferences:
+        notifications = preferences["notifications"]
+        if not isinstance(notifications, dict):
+            issues.append({"field": "preferences.notifications", "reason": "invalid_type"})
+        else:
+            _validate_notification_preferences(notifications, issues)
+
+    if issues:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_PREFERENCES",
+                "message": "Preference values are invalid.",
+                "details": issues,
+            },
+        )
+    return dict(preferences)
+
+
+def _validate_notification_preferences(
+    notifications: dict[str, object],
+    issues: list[dict[str, str]],
+) -> None:
+    if "email_enabled" in notifications:
+        email_enabled = notifications["email_enabled"]
+        if not isinstance(email_enabled, bool):
+            issues.append(
+                {"field": "preferences.notifications.email_enabled", "reason": "invalid_type"}
+            )
+
+    if "watchlist_digest" in notifications:
+        watchlist_digest = notifications["watchlist_digest"]
+        if watchlist_digest not in {"off", "daily", "weekly"}:
+            issues.append(
+                {"field": "preferences.notifications.watchlist_digest", "reason": "invalid_value"}
+            )
 
 
 def _watchlist_rows(session: Session, user: User) -> list[Watchlist]:
@@ -301,6 +395,18 @@ def _chat_session_response(row: ChatSession) -> UserChatSessionResponse:
         title=row.title,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+def _chat_message_response(row: ChatMessage) -> UserChatMessageResponse:
+    return UserChatMessageResponse(
+        message_id=row.message_id,
+        role=row.role,
+        content=row.content,
+        ticker=row.ticker,
+        citations=list(row.citations or []),
+        safety_flags=list(row.safety_flags or []),
+        created_at=row.created_at,
     )
 
 

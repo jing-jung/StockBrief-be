@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -69,6 +71,177 @@ def test_backend_ci_checks_lambda_packaging_script_on_pr() -> None:
     assert 'test "$first_hash" = "$second_hash"' in workflow
 
 
+def test_backend_dev_deploy_checks_assumed_account_matches_backend() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows/backend-dev-deploy.yml"
+    ).read_text(encoding="utf-8")
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Verify deploy account matches Terraform backend" in workflow
+    assert "target_env:" in workflow
+    assert 'TARGET_ENV: ${{ github.event.inputs.target_env || \'dev\' }}' in workflow
+    assert "backends/{target_env}.hcl" in workflow
+    assert "envs/{target_env}/deploy.auto.tfvars.json" in workflow
+    assert "TF_BACKEND_CONFIG: ${{ steps.deploy-profile.outputs.tf_backend_config }}" in workflow
+    assert "scripts/verify_deploy_account_matches_backend.sh" in workflow
+    assert "Before Terraform init, `backend-dev-deploy` compares the account" in deployment_doc
+    assert "cannot accidentally deploy against a backend that" in deployment_doc
+    assert "During account transition work, this failure is the expected guardrail" in deployment_doc
+    assert "not as a deployment regression" in deployment_doc
+
+
+def test_backend_dev_deploy_supports_target_environment_profiles() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows/backend-dev-deploy.yml"
+    ).read_text(encoding="utf-8")
+    bootstrap_doc = (
+        REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Resolve deploy profile" in workflow
+    assert 'target_env != "dev" and not target_env.startswith("dev-")' in workflow
+    assert "backend-dev-deploy only accepts dev or dev-* target_env values" in workflow
+    assert "AWS_{target_env.upper().replace('-', '_')}_DEPLOY_ROLE_ARN" in workflow
+    assert 'variables.get("TF_BACKEND_CONFIG_HCL")' in workflow
+    assert 'variables.get("TFVARS_JSON")' in workflow
+    assert "TFVARS_JSON environment must match target_env" in workflow
+    assert 'json.dump(parsed_tfvars, tfvars_file, ensure_ascii=False, indent=2)' in workflow
+    assert "Missing deploy profile file(s):" in workflow
+    assert 'os.path.join(os.environ["TF_DIR"], tf_var_file)' in workflow
+    assert 'os.path.join(os.environ["TF_DIR"], tf_backend_config)' in workflow
+    assert 'terraform init' in workflow
+    assert '-backend-config="${{ steps.deploy-profile.outputs.tf_backend_config }}"' in workflow
+    assert '-var-file="${{ steps.deploy-profile.outputs.tf_var_file }}"' in workflow
+    assert "target_env=dev-junwoo" in bootstrap_doc
+    assert "backends/dev-junwoo.hcl" in bootstrap_doc
+    assert "envs/dev-junwoo/deploy.auto.tfvars.json" in bootstrap_doc
+    assert "`target_env=dev` 또는" in bootstrap_doc
+    assert "`target_env=dev-*`만 허용" in bootstrap_doc
+    assert "TF_BACKEND_CONFIG_HCL" in bootstrap_doc
+    assert "TFVARS_JSON" in bootstrap_doc
+    assert "`amplify_cognito_redirect_uri`는 `enable_amplify=false`" in bootstrap_doc
+    assert "`agentcore_runtime_container_uri`는 `agentcore_runtime_enabled=false`" in bootstrap_doc
+
+
+def test_new_aws_bootstrap_documents_manual_amplify_account_switching() -> None:
+    bootstrap_doc = (
+        REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+
+    assert "FE Amplify 콘솔 수동 생성 방법" in bootstrap_doc
+    assert "현재 활성 AWS 계정마다 Amplify app을 하나 만든다" in bootstrap_doc
+    assert "NEXT_PUBLIC_API_BASE_URL=<api_base_url>/v1" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_USER_POOL_ID=<cognito_user_pool_id>" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=<cognito_app_client_id>" in bootstrap_doc
+    assert "NEXT_PUBLIC_COGNITO_HOSTED_UI_DOMAIN=<cognito_hosted_ui_domain에서 https:// 제거>" in bootstrap_doc
+    assert "callback: https://main.<amplify-default-domain>/auth/callback" in bootstrap_doc
+    assert "Amplify access token이나" in bootstrap_doc
+
+
+def test_deploy_account_guard_accepts_matching_accounts(tmp_path: Path) -> None:
+    result = _run_deploy_account_guard(
+        tmp_path,
+        assumed_account="123456789012",
+        role_arn="arn:aws:iam::123456789012:role/stockbrief-dev-github-actions-deploy",
+        state_bucket="stockbrief-terraform-state-123456789012-ap-northeast-2",
+    )
+
+    assert result.returncode == 0
+    assert "Verified deploy account 123456789012 matches" in result.stdout
+
+
+def test_deploy_account_guard_accepts_matching_backend_config(
+    tmp_path: Path,
+) -> None:
+    backend_config = tmp_path / "dev-member.hcl"
+    backend_config.write_text(
+        '''
+bucket = "stockbrief-terraform-state-123456789012-ap-northeast-2"
+key    = "stockbrief/dev-member/terraform.tfstate"
+region = "ap-northeast-2"
+''',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", "scripts/verify_deploy_account_matches_backend.sh"],
+        cwd=REPOSITORY_ROOT,
+        env={
+            **os.environ,
+            "ASSUMED_AWS_ACCOUNT_ID": "123456789012",
+            "DEPLOY_ROLE_ARN": "arn:aws:iam::123456789012:role/stockbrief-dev-member-github-actions-deploy",
+            "TF_DIR": str(tmp_path),
+            "TF_BACKEND_CONFIG": "dev-member.hcl",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "dev-member.hcl" in result.stdout
+
+
+def test_deploy_account_guard_rejects_unparseable_role_arn(tmp_path: Path) -> None:
+    result = _run_deploy_account_guard(
+        tmp_path,
+        assumed_account="123456789012",
+        role_arn="not-an-iam-role-arn",
+        state_bucket="stockbrief-terraform-state-123456789012-ap-northeast-2",
+    )
+
+    assert result.returncode == 1
+    assert "Could not parse AWS account id from AWS_DEV_DEPLOY_ROLE_ARN" in result.stdout
+
+
+def test_deploy_account_guard_rejects_unparseable_backend_bucket(tmp_path: Path) -> None:
+    result = _run_deploy_account_guard(
+        tmp_path,
+        assumed_account="123456789012",
+        role_arn="arn:aws:iam::123456789012:role/stockbrief-dev-github-actions-deploy",
+        state_bucket="unexpected-state-bucket",
+    )
+
+    assert result.returncode == 1
+    assert "Could not parse AWS account id from Terraform backend bucket" in result.stdout
+
+
+def test_deploy_account_guard_rejects_assumed_role_account_mismatch(
+    tmp_path: Path,
+) -> None:
+    result = _run_deploy_account_guard(
+        tmp_path,
+        assumed_account="999999999999",
+        role_arn="arn:aws:iam::123456789012:role/stockbrief-dev-github-actions-deploy",
+        state_bucket="stockbrief-terraform-state-999999999999-ap-northeast-2",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Assumed AWS account 999999999999 does not match deploy role account 123456789012"
+        in result.stdout
+    )
+
+
+def test_deploy_account_guard_rejects_assumed_backend_account_mismatch(
+    tmp_path: Path,
+) -> None:
+    result = _run_deploy_account_guard(
+        tmp_path,
+        assumed_account="123456789012",
+        role_arn="arn:aws:iam::123456789012:role/stockbrief-dev-github-actions-deploy",
+        state_bucket="stockbrief-terraform-state-999999999999-ap-northeast-2",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Assumed AWS account 123456789012 does not match Terraform backend account 999999999999"
+        in result.stdout
+    )
+
+
 def test_external_api_secret_update_script_handles_secret_payload_safely() -> None:
     script = (REPOSITORY_ROOT / "scripts/update_external_api_secret.sh").read_text(
         encoding="utf-8"
@@ -122,6 +295,40 @@ def _markdown_section(markdown: str, heading: str) -> str:
     return markdown[start:next_heading]
 
 
+def _run_deploy_account_guard(
+    tmp_path: Path,
+    *,
+    assumed_account: str,
+    role_arn: str,
+    state_bucket: str,
+) -> subprocess.CompletedProcess[str]:
+    backend_file = tmp_path / "backend.tf"
+    backend_file.write_text(
+        f'''
+terraform {{
+  backend "s3" {{
+    bucket = "{state_bucket}"
+  }}
+}}
+''',
+        encoding="utf-8",
+    )
+
+    return subprocess.run(
+        ["bash", "scripts/verify_deploy_account_matches_backend.sh"],
+        cwd=REPOSITORY_ROOT,
+        env={
+            **os.environ,
+            "ASSUMED_AWS_ACCOUNT_ID": assumed_account,
+            "DEPLOY_ROLE_ARN": role_arn,
+            "TF_BACKEND_FILE": str(backend_file),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _bootstrap_policy_document(script: str) -> dict[str, object]:
     match = re.search(
         r'cat >"\$\{tmpdir\}/deploy-policy\.json" <<POLICY\n(?P<policy>.*?)\nPOLICY',
@@ -134,16 +341,30 @@ def _bootstrap_policy_document(script: str) -> dict[str, object]:
     return policy
 
 
-def _statement_actions(policy: dict[str, object], sid: str) -> set[str]:
+def _statement(policy: dict[str, object], sid: str) -> dict[str, object]:
     statements = policy["Statement"]
     assert isinstance(statements, list)
     for statement in statements:
         assert isinstance(statement, dict)
         if statement.get("Sid") == sid:
-            actions = statement["Action"]
-            assert isinstance(actions, list)
-            return {str(action) for action in actions}
+            return statement
     raise AssertionError(f"Policy statement not found: {sid}")
+
+
+def _statement_actions(policy: dict[str, object], sid: str) -> set[str]:
+    actions = _statement(policy, sid)["Action"]
+    if isinstance(actions, str):
+        return {actions}
+    assert isinstance(actions, list)
+    return {str(action) for action in actions}
+
+
+def _statement_resources(policy: dict[str, object], sid: str) -> set[str]:
+    resources = _statement(policy, sid)["Resource"]
+    if isinstance(resources, str):
+        return {resources}
+    assert isinstance(resources, list)
+    return {str(resource) for resource in resources}
 
 
 def test_ingestion_scheduler_enable_gate_documents_live_provider_prerequisites() -> None:
@@ -220,8 +441,8 @@ def test_new_aws_bootstrap_uses_placeholders_for_operational_identifiers() -> No
         REPOSITORY_ROOT / "docs/engineering/NEW_AWS_BOOTSTRAP.md"
     ).read_text(encoding="utf-8")
 
-    assert "Do not commit those operational identifiers" in bootstrap_doc
-    assert "regardless of repository visibility" in bootstrap_doc
+    assert "실제 계정 ID, 리소스 ID, API ID, Cognito ID, 도메인은" in bootstrap_doc
+    assert "공개 문서에 그대로 남기지 말고" in bootstrap_doc
     assert "<api-gateway-base-url>" in bootstrap_doc
     assert "<cognito-issuer-url>" in bootstrap_doc
     assert "<cognito-user-pool-id>" in bootstrap_doc
@@ -272,45 +493,153 @@ def test_deployment_bootstrap_documents_nat_egress_plan_review_checklist() -> No
     assert "If any non-NAT item is unexplained, do not apply" in checklist
 
 
-def test_github_deploy_role_policy_can_refresh_ingestion_and_nat_resources() -> None:
+def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
     bootstrap_script = (REPOSITORY_ROOT / "scripts/bootstrap_github_oidc.sh").read_text(
         encoding="utf-8"
     )
     deploy_policy = _bootstrap_policy_document(bootstrap_script)
-    deployment_actions = _statement_actions(deploy_policy, "DevBackendDeployment")
+    wildcard_actions = _statement_actions(
+        deploy_policy, "DevBackendDeploymentWildcardFallback"
+    )
     deployment_doc = (
         REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
     ).read_text(encoding="utf-8")
+
+    assert 'resource_name_prefix="stockbrief-${environment}"' in bootstrap_script
+
+    assert _statement_resources(deploy_policy, "DeployIamRolesByPrefix") == {
+        "arn:aws:iam::${account_id}:role/${resource_name_prefix}-*"
+    }
+    assert _statement_actions(deploy_policy, "DeployPassRolesByPrefix") == {
+        "iam:PassRole"
+    }
+    assert _statement(deploy_policy, "DeployPassRolesByPrefix")["Condition"] == {
+        "StringEquals": {
+            "iam:PassedToService": [
+                "bedrock-agentcore.amazonaws.com",
+                "lambda.amazonaws.com",
+                "rds.amazonaws.com",
+                "scheduler.amazonaws.com",
+            ]
+        }
+    }
+    assert _statement_resources(deploy_policy, "DeployLambdaFunctionByPrefix") == {
+        "arn:aws:lambda:${region}:${account_id}:function:${resource_name_prefix}-*"
+    }
+    assert _statement_resources(deploy_policy, "DeployLogGroupsByPrefix") == {
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/amplify/${resource_name_prefix}-web",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/amplify/${resource_name_prefix}-web:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/apigateway/${resource_name_prefix}-http-api",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/apigateway/${resource_name_prefix}-http-api:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/${resource_name_prefix}-api",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/${resource_name_prefix}-api:*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres:*",
+    }
+    assert _statement_resources(deploy_policy, "DeploySecretsByPrefix") == {
+        "arn:aws:secretsmanager:${region}:${account_id}:secret:${resource_name_prefix}/*"
+    }
+    assert _statement_resources(deploy_policy, "DeployRdsManagedMasterUserSecret") == {
+        "arn:aws:secretsmanager:${region}:${account_id}:secret:rds!db-*"
+    }
+    assert _statement_actions(deploy_policy, "DeployRdsManagedMasterUserSecret") == {
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource",
+    }
+    assert _statement_resources(deploy_policy, "DeploySqsQueuesByPrefix") == {
+        "arn:aws:sqs:${region}:${account_id}:${resource_name_prefix}-*"
+    }
+    assert _statement_resources(deploy_policy, "DeploySchedulesByPrefix") == {
+        "arn:aws:scheduler:${region}:${account_id}:schedule/default/${resource_name_prefix}-*"
+    }
+    assert _statement_resources(deploy_policy, "DeployIngestionRawBucketByPrefix") == {
+        "arn:aws:s3:::${resource_name_prefix}-raw-${account_id}-${region}",
+        "arn:aws:s3:::${resource_name_prefix}-raw-${account_id}-${region}/*",
+    }
+    assert "s3:PutEncryptionConfiguration" in _statement_actions(
+        deploy_policy, "TerraformStateBucket"
+    )
+    assert "s3:PutEncryptionConfiguration" in _statement_actions(
+        deploy_policy, "DeployIngestionRawBucketByPrefix"
+    )
+
+    for scoped_sid, action in [
+        ("DeployLambdaFunctionByPrefix", "lambda:UpdateFunctionCode"),
+        ("DeployIamRolesByPrefix", "iam:CreateRole"),
+        ("DeploySecretsByPrefix", "secretsmanager:CreateSecret"),
+        ("DeployIngestionRawBucketByPrefix", "s3:GetBucketPublicAccessBlock"),
+        ("DeploySqsQueuesByPrefix", "sqs:GetQueueAttributes"),
+        ("DeploySchedulesByPrefix", "scheduler:CreateSchedule"),
+        ("DeploySnsTopicsByPrefix", "sns:CreateTopic"),
+        ("DeployCloudWatchAlarmsByPrefix", "cloudwatch:PutMetricAlarm"),
+        ("DeployLogGroupsByPrefix", "logs:PutRetentionPolicy"),
+    ]:
+        assert action in _statement_actions(deploy_policy, scoped_sid)
+        assert action not in wildcard_actions
 
     for action in [
         "kms:DescribeKey",
         "kms:GetKeyPolicy",
         "kms:GetKeyRotationStatus",
-        "s3:GetBucketPublicAccessBlock",
-        "s3:GetLifecycleConfiguration",
-        "s3:DeleteBucketPublicAccessBlock",
-        "s3:DeleteBucketEncryption",
-        "s3:DeleteLifecycleConfiguration",
-        "s3:GetBucketAcl",
-        "s3:GetBucketOwnershipControls",
-        "sqs:GetQueueAttributes",
+        "apigateway:*",
         "ec2:CreateNatGateway",
         "ec2:DescribeNatGateways",
         "ec2:AllocateAddress",
         "ec2:DescribeAddressesAttribute",
         "ec2:CreateRouteTable",
         "ec2:AssociateRouteTable",
-        "scheduler:CreateSchedule",
-        "scheduler:GetSchedule",
-        "scheduler:UpdateSchedule",
-        "scheduler:DeleteSchedule",
-        "scheduler:TagResource",
+        "rds:CreateDBProxy",
+        "logs:CreateLogGroup",
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:DescribeResourcePolicies",
+        "logs:GetLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:TagResource",
+        "logs:UpdateLogDelivery",
+        "cloudwatch:DescribeAlarms",
     ]:
-        assert action in deployment_actions
+        assert action in wildcard_actions
+
+    assert "lambda:*" not in bootstrap_script
+    assert "iam:*" not in bootstrap_script
+    assert "s3:PutBucketEncryption" not in bootstrap_script
+    assert "s3:DeleteBucketEncryption" not in bootstrap_script
+    assert "s3:DeleteBucketPublicAccessBlock" not in bootstrap_script
+    assert "s3:DeleteBucketTagging" not in bootstrap_script
+    assert "s3:DeleteLifecycleConfiguration" not in bootstrap_script
     assert "Terraform refresh" in deployment_doc
     assert "deploy role" in deployment_doc
-    assert "EIP address" in deployment_doc
-    assert "attributes/route table state" in deployment_doc
+    assert "stockbrief-<environment>-*" in deployment_doc
+    assert "wildcard fallback statement" in deployment_doc
+    assert "API Gateway stage creation" in deployment_doc
+    assert "Access Analyzer reports" in deployment_doc
+    assert "`apigateway:TagResource`" in deployment_doc
+    assert "`apigateway:UntagResource`" in deployment_doc
+    assert "`apigateway:*`" in deployment_doc
+    assert "HTTP API access logging" in deployment_doc
+    assert "`logs:CreateLogDelivery`" in deployment_doc
+    assert "`logs:PutResourcePolicy`" in deployment_doc
+    assert "`logs:UpdateLogDelivery`" in deployment_doc
+    assert "Analyzer-valid narrower action set" in deployment_doc
+    assert "Prefer adding a narrow" in deployment_doc
+    assert "PR #164 covers only the apply blocker" in deployment_doc
+    assert "It does not close #52 by itself" in deployment_doc
+    assert "`logs:TagResource` addition" in deployment_doc
+    assert "future narrowing candidate in #52" in deployment_doc
+    assert "managed master user password secrets" in deployment_doc
+    assert "AWS's" in deployment_doc
+    assert "`rds!db-*` naming" in deployment_doc
+    assert "After PR #164 merges" in deployment_doc
+    assert "live" in deployment_doc
+    assert "deploy role inline policy" in deployment_doc
+    assert "no longer fails on" in deployment_doc
+    assert "`logs:CreateLogDelivery`" in deployment_doc
+    assert "`rds!db-*` exception remains part of the least-privilege" in deployment_doc
+    assert "Keep the least-privilege hardening issue open" in deployment_doc
+    assert "`backend-dev-deploy` verification are complete" in deployment_doc
 
 
 def test_bootstrap_reconciles_dev_environment_branch_policy_to_main_only() -> None:
@@ -323,7 +652,7 @@ def test_bootstrap_reconciles_dev_environment_branch_policy_to_main_only() -> No
 
     policy_reconciliation = bootstrap_script[
         bootstrap_script.index("obsolete_branch_policies=") :
-        bootstrap_script.index("echo \"Setting GitHub repository variables")
+        bootstrap_script.index("echo \"Setting GitHub Environment variables")
     ]
 
     assert "obsolete_branch_policies" in policy_reconciliation

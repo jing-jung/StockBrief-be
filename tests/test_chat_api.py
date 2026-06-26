@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Mapping
+from datetime import date, datetime, timezone
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -9,8 +10,20 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.main import app
+from app.models import (
+    RecommendationCandidateResponse,
+    RecommendationReasonResponse,
+    ScoreComponentResponse,
+    StockEvidenceItemResponse,
+)
 from app.orm import EvidenceChunk, FinancialStatement, PriceMetric, RecommendationScore
-from app.services.chat import ChatProviderUnavailable, chat_provider_for, compose_chat_answer
+from app.services.chat import (
+    ChatProviderInput,
+    ChatProviderUnavailable,
+    chat_provider_for,
+    compose_chat_answer,
+)
+from app.services.chat.providers import BedrockChatProvider
 
 
 PROHIBITED_KOREAN_OUTPUT_TERMS = [
@@ -195,6 +208,146 @@ def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
     assert fake_client.calls
     assert fake_client.calls[0]["modelId"] == "apac.amazon.nova-micro-v1:0"
     assert fake_client.calls[0]["inferenceConfig"]["maxTokens"] == 700
+
+
+def test_chat_bedrock_prompt_only_includes_guard_allowed_evidence() -> None:
+    class FakeBedrockClient:
+        def __init__(self) -> None:
+            self.call: dict[str, Any] | None = None
+
+        def converse(self, **kwargs):
+            self.call = kwargs
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": (
+                                    "삼성전자(005930)는 공개 데이터 기준으로 검토할 수 있는 "
+                                    "후보입니다. [ev_used_a] [ev_used_a] [ev_used_b]"
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+
+    fake_client = FakeBedrockClient()
+    provider = BedrockChatProvider(
+        model_id="apac.amazon.nova-micro-v1:0",
+        region_name="ap-northeast-2",
+        client=fake_client,
+    )
+    candidate = RecommendationCandidateResponse(
+        ticker="005930",
+        name="삼성전자",
+        market="KOSPI",
+        sector="반도체",
+        recommendation_score=73.2,
+        score_components=[
+            ScoreComponentResponse(
+                name="disclosure_event",
+                weight=10,
+                raw_score=70.0,
+                weighted_score=7.0,
+                reason="공시 근거가 확인되었습니다.",
+                evidence_ids=["ev_used_a"],
+            )
+        ],
+        recommendation_reasons=[
+            RecommendationReasonResponse(
+                reason_id="reason-disclosure",
+                component="disclosure_event",
+                summary="최근 공시와 실적 근거가 연결되었습니다.",
+                evidence_ids=["ev_used_a", "ev_used_b", "ev_used_c", "ev_used_d", "ev_unused"],
+            )
+        ],
+        risk_tags=["근거 확인 필요"],
+        evidence_level="strong",
+        evidence_count=3,
+        missing_data=[],
+        data_freshness={"as_of": "2026-06-24"},
+        disclaimer="이 정보는 투자 조언이 아닙니다.",
+    )
+    evidence = [
+        StockEvidenceItemResponse(
+            id="ev_unused",
+            type="news",
+            title="프롬프트에 들어가면 안 되는 뉴스",
+            summary="baseline citation이 아니므로 Bedrock context에서 제외되어야 합니다.",
+            source_name="Test News",
+            source_url="https://example.com/unused",
+            published_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+            as_of_date=date(2026, 6, 24),
+            data_status="available",
+        ),
+        StockEvidenceItemResponse(
+            id="ev_used_a",
+            type="disclosure",
+            title="분기보고서",
+            summary="공시 근거입니다.",
+            source_name="OpenDART",
+            source_url="https://example.com/a",
+            published_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+            as_of_date=date(2026, 6, 24),
+            data_status="available",
+        ),
+        StockEvidenceItemResponse(
+            id="ev_used_b",
+            type="financial",
+            title="재무 요약",
+            summary="실적 근거입니다.",
+            source_name="OpenDART",
+            source_url="https://example.com/b",
+            published_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+            as_of_date=date(2026, 6, 24),
+            data_status="available",
+        ),
+        StockEvidenceItemResponse(
+            id="ev_used_c",
+            type="price",
+            title="가격 지표",
+            summary="거래 지표 근거입니다.",
+            source_name="KRX",
+            source_url="https://example.com/c",
+            published_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+            as_of_date=date(2026, 6, 24),
+            data_status="available",
+        ),
+        StockEvidenceItemResponse(
+            id="ev_used_d",
+            type="news",
+            title="시장 뉴스",
+            summary="시장 관심도 근거입니다.",
+            source_name="NAVER_NEWS",
+            source_url="https://example.com/d",
+            published_at=datetime(2026, 6, 24, tzinfo=timezone.utc),
+            as_of_date=date(2026, 6, 24),
+            data_status="available",
+        ),
+    ]
+
+    response = provider.compose(
+        ChatProviderInput(
+            message="왜 추천됐나요?",
+            candidate=candidate,
+            evidence=evidence,
+        )
+    )
+
+    assert response.used_evidence_ids == ["ev_used_a", "ev_used_b", "ev_used_c", "ev_used_d"]
+    assert fake_client.call is not None
+    prompt = fake_client.call["messages"][0]["content"][0]["text"]
+    assert "Allowed citation IDs: ev_used_a, ev_used_b, ev_used_c, ev_used_d" in prompt
+    assert "evidence_ids=ev_used_a, ev_used_b, ev_used_c, ev_used_d" in prompt
+    assert "ev_used_a" in prompt
+    assert "ev_used_b" in prompt
+    assert "title=분기보고서" in prompt
+    assert "summary=공시 근거입니다." in prompt
+    assert prompt.count("id=ev_used_a;") == 1
+    assert "title=재무 요약" in prompt
+    assert "summary=실적 근거입니다." in prompt
+    assert "ev_unused" not in prompt
 
 
 def test_chat_bedrock_provider_rejects_unsupported_model_citation(

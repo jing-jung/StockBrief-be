@@ -28,7 +28,7 @@ be lowercase: `https://token.actions.githubusercontent.com`, and the audience is
 ## Prerequisites
 
 - AWS CLI authenticated to the target AWS account.
-- GitHub CLI authenticated with permission to write repository variables.
+- GitHub CLI authenticated with permission to write GitHub Environment variables.
 - Permission to create or update IAM OIDC providers, IAM roles, S3 buckets, and
   DynamoDB tables in the target AWS account.
 - Permission to set variables on `80-hours-a-week/StockBrief-be`.
@@ -72,7 +72,7 @@ The script creates or updates:
 - IAM deploy role scoped to `80-hours-a-week/StockBrief-be` `main`.
 - GitHub Environment named `dev` with a custom deployment branch policy that
   allows only `main`.
-- GitHub repository variables:
+- GitHub Environment variables:
   - `AWS_DEV_DEPLOY_ROLE_ARN`
   - `OPERATIONAL_ALARM_EMAILS_JSON`
 
@@ -80,7 +80,7 @@ The deploy role policy is intentionally broad enough for the current dev
 Terraform deployment. Tighten it after the deployment surface stabilizes.
 
 `--alarm-emails-json` must be valid JSON and must be an array of strings. The
-script validates this with Python before writing the GitHub repository variable.
+script validates this with Python before writing the GitHub Environment variable.
 
 ## After Bootstrap
 
@@ -149,34 +149,63 @@ API Gateway, Cognito, Secrets Manager, and alarms are managed by Terraform.
 
 ## Deployment Flow After Bootstrap
 
-1. Merge backend changes into `main`.
-2. GitHub Actions runs `backend-dev-deploy` in the `dev` GitHub Environment.
-3. The workflow assumes `AWS_DEV_DEPLOY_ROLE_ARN` through OIDC.
-4. The workflow packages Lambda, runs Terraform plan, and applies the dev stack.
-5. Update Secrets Manager values outside git when keys or DB connection values
+1. Merge backend changes into `main`, or manually run `backend-dev-deploy`.
+2. GitHub Actions resolves a dev deploy profile. Pushes to `main` use
+   `target_env=dev`; manual runs can choose another dev profile such as
+   `dev-junwoo`. This workflow accepts only `dev` or `dev-*`; staging and prod
+   must use dedicated workflows.
+3. The workflow runs in the GitHub Environment named after `target_env`.
+4. The workflow assumes `AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` through OIDC. The
+   legacy `AWS_DEV_DEPLOY_ROLE_ARN` fallback is allowed only for `target_env=dev`.
+5. The workflow packages Lambda, initializes Terraform with
+   `backends/<target_env>.hcl`, plans with
+   `envs/<target_env>/deploy.auto.tfvars.json`, and applies the selected stack.
+   If those profile files are not committed, the workflow creates them at
+   runtime from the selected GitHub Environment variables
+   `TF_BACKEND_CONFIG_HCL` and `TFVARS_JSON`.
+6. Update Secrets Manager values outside git when keys or DB connection values
    change.
 
-Because `backend-dev-deploy` uses `environment: dev`, the OIDC trust policy uses
-this subject:
+Because `backend-dev-deploy` uses the selected GitHub Environment, the OIDC
+trust policy uses this subject pattern:
 
 ```text
-repo:80-hours-a-week/StockBrief-be:environment:dev
+repo:80-hours-a-week/StockBrief-be:environment:<target_env>
 ```
 
 The branch restriction is enforced by the GitHub Environment deployment branch
-policy. The bootstrap script configures the `dev` environment to allow only the
+policy. The bootstrap script configures the selected environment to allow only the
 `main` branch.
 
-The dev workflow uses `infra/terraform/backend.tf`, so it always targets the
-backend committed in that file. If a new environment needs a different backend,
-create a dedicated workflow or update the backend configuration in the same PR
-as the environment tfvars change.
+The dev workflow uses profile files instead of editing `backend.tf` for every
+handoff:
 
-`AWS_DEV_DEPLOY_ROLE_ARN` and `OPERATIONAL_ALARM_EMAILS_JSON` may live as
-repository variables or `dev` environment variables. Prefer environment
-variables when the repository has multiple deploy environments. Add GitHub
-Environment required reviewers later if the team wants manual approval before
-dev apply.
+```text
+infra/terraform/backends/<target_env>.hcl
+infra/terraform/envs/<target_env>/deploy.auto.tfvars.json
+```
+
+Add a profile pair before a team member account is eligible for manual deploy.
+For team member accounts, prefer storing the real profile body in GitHub
+Environment variables and letting the workflow create those files at runtime.
+Do not point two target environments at the same state key unless the team is
+intentionally sharing the same Terraform state.
+
+Before Terraform init, `backend-dev-deploy` compares the account assumed from
+the resolved deploy role with the account encoded in the selected Terraform
+state bucket name. The workflow stops immediately if those accounts differ, so
+a deploy role variable update cannot accidentally deploy against a backend that
+still belongs to another AWS account.
+During account transition work, this failure is the expected guardrail when
+`AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` points at one account but
+`backends/<target_env>.hcl` still points at another state bucket. Treat the
+failure as a configuration handoff signal, not as a deployment regression.
+
+`AWS_<TARGET_ENV>_DEPLOY_ROLE_ARN` and `OPERATIONAL_ALARM_EMAILS_JSON` must live
+in the matching GitHub Environment variables. Do not store team-specific deploy
+role ARNs, backend config, tfvars, or alarm recipients in repository-level
+variables. Add GitHub Environment required reviewers later if the team wants
+manual approval before dev apply.
 
 ## Dev Cost Pause And Resume Runbook
 
@@ -191,7 +220,7 @@ Before pausing, record the current target account and Terraform state:
 aws sts get-caller-identity --profile stockbrief-dev
 
 cd infra/terraform
-terraform init -reconfigure
+terraform init -reconfigure -backend-config=backends/dev.hcl
 terraform state list
 terraform output api_base_url
 terraform output ingestion_dlq_url
@@ -348,16 +377,50 @@ backend changes. The role is separate from the administrator identity used to ru
 bootstrap:
 
 - Bootstrap identity: creates the first state bucket, lock table, OIDC provider,
-  deploy role, and GitHub variables.
+  deploy role, and GitHub Environment variables.
 - Deploy role: assumed by GitHub Actions jobs that target the `dev` Environment.
   The `dev` Environment branch policy allows only `main` deployments.
 
 The deploy role keeps Terraform state bucket and lock table permissions scoped
 to exact ARNs. Service deployment actions are enumerated instead of using broad
-service wildcards such as `lambda:*` or `iam:*`. Some create, describe, and tag
-APIs still require `Resource: "*"` because the resource ARN is not known before
-creation or the AWS API does not support resource-level permissions for that
-operation.
+service wildcards such as `lambda:*` or `iam:*`.
+
+The bootstrap policy also splits actions with predictable StockBrief resource
+names into resource-scoped statements. The role can manage matching
+`stockbrief-<environment>-*` Lambda functions, IAM roles, CloudWatch alarms,
+CloudWatch log groups, Secrets Manager secrets, SNS topics, SQS queues,
+EventBridge Scheduler schedules, and the ingestion raw archive bucket. The
+`iam:PassRole` permission is restricted to matching role names and the AWS
+services that need those roles.
+
+Some services remain in the wildcard fallback statement because Terraform needs
+create, describe, or provider refresh APIs whose resource ARN is unknown before
+creation or not consistently supported by the AWS API. This currently includes
+API Gateway, Amplify, CloudFormation, Cognito, EC2 networking, KMS, RDS,
+CloudWatch alarm reads, log group creation/listing, API Gateway access log
+delivery registration, SNS subscription cleanup, and STS caller identity.
+API Gateway stage creation can fail with an `apigateway:TagResource`
+AccessDenied error when Terraform applies tags to the `$default` stage, but
+Access Analyzer reports `apigateway:TagResource` and
+`apigateway:UntagResource` as invalid IAM actions. Keep the API Gateway
+management plane on `apigateway:*` in the fallback statement until AWS exposes
+an Analyzer-valid narrower action set that still covers stage tagging.
+HTTP API access logging also calls CloudWatch Logs delivery APIs such as
+`logs:CreateLogDelivery`, `logs:PutResourcePolicy`, and
+`logs:UpdateLogDelivery` while creating or updating
+`aws_apigatewayv2_stage.default`. AWS documents these logging activation
+permissions with `Resource: "*"`, so keep them in the fallback statement unless
+AWS exposes resource-level support that still works with API Gateway HTTP API
+access logs.
+
+PR #164 covers only the apply blocker found after the new dev account
+transition. It does not close #52 by itself. The `logs:TagResource` addition
+stays in the wildcard fallback for the current unblock and must remain tracked
+as a future narrowing candidate in #52. The
+`DeployRdsManagedMasterUserSecret` statement is intentionally scoped to
+`arn:aws:secretsmanager:<region>:<account-id>:secret:rds!db-*` because RDS
+managed master user password secrets are created under AWS's `rds!db-*` naming
+scheme instead of the StockBrief `stockbrief-<environment>-*` prefix.
 
 Terraform refresh also needs read permissions for every managed resource type.
 When ingestion raw archive or provider egress resources are enabled, the deploy
@@ -375,14 +438,29 @@ scripts/bootstrap_github_oidc.sh --dry-run --alarm-emails-json '["REPLACE_WITH_A
 scripts/bootstrap_github_oidc.sh --alarm-emails-json '["REPLACE_WITH_ALERT_EMAIL"]'
 ```
 
-Then verify the updated role with a real `backend-dev-deploy` workflow run.
+Then verify the updated role with a real `backend-dev-deploy` workflow run. If
+the workflow fails with `AccessDenied`, inspect the denied action and resource
+before widening the wildcard fallback. Prefer adding a narrow
+`stockbrief-<environment>-*` ARN statement when the AWS service supports it.
+For policy edits, also validate the generated IAM policy with AWS Access
+Analyzer and resolve `ERROR` findings before applying it to the deploy role.
+After PR #164 merges, record on #52 that the bootstrap rerun updated the live
+deploy role inline policy, the new account/backend `backend-dev-deploy` run
+succeeded or failed with an expected guard, Terraform apply no longer fails on
+`logs:TagResource`, `logs:CreateLogDelivery`, or `rds!db-*` Secrets Manager
+permissions, and the `rds!db-*` exception remains part of the least-privilege
+tracking rationale.
+Keep the least-privilege hardening issue open until the bootstrap rerun and
+`backend-dev-deploy` verification are complete, then record the result on that
+issue before deciding whether it is done.
 
 ## New Environment Checklist
 
 - Run the bootstrap script once in the target AWS account.
-- Update `infra/terraform/backend.tf` for that account and region.
-- Update `infra/terraform/envs/dev/deploy.auto.tfvars.json` for that network and
-  frontend URL.
+- Add or update `infra/terraform/backends/<target_env>.hcl` for that account and
+  region.
+- Add or update `infra/terraform/envs/<target_env>/deploy.auto.tfvars.json` for
+  that network, cost posture, and frontend URL.
 - Run `terraform init -reconfigure` or `terraform init -migrate-state` according
   to the backend change type.
 - Confirm `terraform state list` points to the intended environment before

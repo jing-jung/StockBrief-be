@@ -6,8 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.orm import ApiCacheEntry, ExternalApiCallLog
-from app.services.external import NaverNewsClient, OpenDartClient
-from app.services.external import aws_secrets
+from app.services.external import NaverNewsClient, OpenDartClient, aws_secrets
 from app.services.external.clients import BaseExternalApiClient
 from app.services.external.logger import ExternalApiCallLogger
 from app.services.external.types import ExternalRequest, ExternalResponse, RateLimitPolicy

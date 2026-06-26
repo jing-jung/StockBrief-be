@@ -5,13 +5,13 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Deployment environment. MVP prioritizes dev."
+  description = "Deployment environment. Use dev, dev-<member>, staging, or prod."
   type        = string
   default     = "dev"
 
   validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be one of dev, staging, or prod."
+    condition     = contains(["dev", "staging", "prod"], var.environment) || can(regex("^dev-[a-z0-9][a-z0-9-]*$", var.environment))
+    error_message = "environment must be dev, dev-<member>, staging, or prod."
   }
 }
 

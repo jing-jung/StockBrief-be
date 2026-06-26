@@ -1,0 +1,5 @@
+bucket         = "stockbrief-terraform-state-REPLACE_WITH_ACCOUNT_ID-ap-northeast-2"
+key            = "stockbrief/REPLACE_WITH_TARGET_ENV/terraform.tfstate"
+region         = "ap-northeast-2"
+dynamodb_table = "stockbrief-terraform-locks"
+encrypt        = true

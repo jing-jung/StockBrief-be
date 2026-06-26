@@ -10,7 +10,7 @@ from app.auth import CognitoClaims, _upsert_user_from_claims, get_current_user, 
 from app.config import Settings, get_settings
 from app.db import get_db_session
 from app.main import app
-from app.orm import ChatMessage, User, Watchlist
+from app.orm import ChatMessage, User, UserPreference, Watchlist
 
 
 def _auth_user(session: Session, sub: str = "cognito-sub-1") -> User:
@@ -223,18 +223,192 @@ def test_get_and_patch_me_uses_cognito_sub_from_auth_context(
 
 def test_preferences_round_trip_for_authenticated_user(seeded_session: Session) -> None:
     client = _authenticated_client(seeded_session)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == "cognito-sub-1")).one()
     try:
         response = client.put(
             "/v1/me/preferences",
-            json={"preferences": {"risk_profile": "balanced", "markets": ["KOSPI"]}},
+            json={
+                "preferences": {
+                    "risk_profile": "balanced",
+                    "markets": ["KOSPI"],
+                    "notifications": {
+                        "email_enabled": True,
+                        "watchlist_digest": "weekly",
+                    },
+                }
+            },
         )
 
         assert response.status_code == 200
         assert response.json()["preferences"]["risk_profile"] == "balanced"
+        assert response.json()["preferences"]["notifications"] == {
+            "email_enabled": True,
+            "watchlist_digest": "weekly",
+        }
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).one()
+        assert preference_row.preferences["risk_profile"] == "balanced"
 
         get_response = client.get("/v1/me/preferences")
         assert get_response.status_code == 200
         assert get_response.json()["preferences"]["markets"] == ["KOSPI"]
+        assert get_response.json()["preferences"]["notifications"]["watchlist_digest"] == "weekly"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_preferences_without_row_returns_empty_preferences_without_creating_row(
+    seeded_session: Session,
+) -> None:
+    user_sub = "preferences-read-only-user"
+    client = _authenticated_client(seeded_session, sub=user_sub)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == user_sub)).one()
+    try:
+        response = client.get("/v1/me/preferences")
+
+        assert response.status_code == 200
+        assert response.json()["preferences"] == {}
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).first()
+        assert preference_row is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_create_and_save_new_row_in_one_commit(
+    seeded_session: Session,
+    monkeypatch,
+) -> None:
+    user_sub = "single-commit-preferences-user"
+    client = _authenticated_client(seeded_session, sub=user_sub)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == user_sub)).one()
+    original_commit = seeded_session.commit
+    commits = {"count": 0}
+
+    def counted_commit() -> None:
+        commits["count"] += 1
+        original_commit()
+
+    monkeypatch.setattr(seeded_session, "commit", counted_commit)
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={"preferences": {"risk_profile": "aggressive"}},
+        )
+
+        assert response.status_code == 200
+        assert commits["count"] == 1
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).one()
+        assert preference_row.preferences == {"risk_profile": "aggressive"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_reject_invalid_known_values(seeded_session: Session) -> None:
+    client = _authenticated_client(seeded_session)
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={
+                "preferences": {
+                    "risk_profile": "certain",
+                    "markets": ["KOSPI"],
+                    "notifications": {
+                        "email_enabled": "yes",
+                        "watchlist_digest": "monthly",
+                    },
+                }
+            },
+        )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error"]["code"] == "INVALID_PREFERENCES"
+        assert payload["error"]["details"] == [
+            {"field": "preferences.risk_profile", "reason": "invalid_value"},
+            {"field": "preferences.notifications.email_enabled", "reason": "invalid_type"},
+            {"field": "preferences.notifications.watchlist_digest", "reason": "invalid_value"},
+        ]
+        get_response = client.get("/v1/me/preferences")
+        assert get_response.status_code == 200
+        assert get_response.json()["preferences"] == {}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_reject_invalid_request_without_creating_empty_row(
+    seeded_session: Session,
+) -> None:
+    user_sub = "new-preferences-user"
+    client = _authenticated_client(seeded_session, sub=user_sub)
+    user = seeded_session.scalars(select(User).where(User.cognito_sub == user_sub)).one()
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={"preferences": {"risk_profile": "certain"}},
+        )
+
+        assert response.status_code == 400
+        preference_row = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).first()
+        assert preference_row is None
+
+        get_response = client.get("/v1/me/preferences")
+        assert get_response.status_code == 200
+        assert get_response.json()["preferences"] == {}
+        preference_row_after_get = seeded_session.scalars(
+            select(UserPreference).where(UserPreference.user_id == user.id)
+        ).first()
+        assert preference_row_after_get is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_reject_invalid_notifications_shape(seeded_session: Session) -> None:
+    client = _authenticated_client(seeded_session)
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={"preferences": {"notifications": "weekly"}},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["details"] == [
+            {"field": "preferences.notifications", "reason": "invalid_type"}
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_preferences_reject_null_known_values(seeded_session: Session) -> None:
+    client = _authenticated_client(seeded_session)
+    try:
+        response = client.put(
+            "/v1/me/preferences",
+            json={
+                "preferences": {
+                    "risk_profile": None,
+                    "notifications": {
+                        "email_enabled": None,
+                        "watchlist_digest": None,
+                    },
+                }
+            },
+        )
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["error"]["code"] == "INVALID_PREFERENCES"
+        assert payload["error"]["details"] == [
+            {"field": "preferences.risk_profile", "reason": "invalid_value"},
+            {"field": "preferences.notifications.email_enabled", "reason": "invalid_type"},
+            {"field": "preferences.notifications.watchlist_digest", "reason": "invalid_value"},
+        ]
     finally:
         app.dependency_overrides.clear()
 
@@ -376,12 +550,16 @@ def test_chat_sessions_are_user_scoped(seeded_session: Session) -> None:
         assert created.status_code == 200
         assert created.json()["ticker"] == "005930"
         assert first_client.get("/v1/me/chat-sessions").json()["count"] == 1
+        session_id = created.json()["session_id"]
     finally:
         app.dependency_overrides.clear()
 
     second_client = _authenticated_client(seeded_session, "cognito-sub-2")
     try:
         assert second_client.get("/v1/me/chat-sessions").json()["count"] == 0
+        detail = second_client.get(f"/v1/me/chat-sessions/{session_id}")
+        assert detail.status_code == 404
+        assert detail.json()["error"]["code"] == "CHAT_SESSION_NOT_FOUND"
     finally:
         app.dependency_overrides.clear()
 
@@ -411,12 +589,50 @@ def test_authenticated_chat_persists_session_and_messages(seeded_session: Sessio
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["data"]["session_id"]
+        session_id = payload["data"]["session_id"]
+        assert session_id
         assert client.get("/v1/me/chat-sessions").json()["count"] == 1
         messages = seeded_session.scalars(
-            select(ChatMessage).where(ChatMessage.session_id == payload["data"]["session_id"])
+            select(ChatMessage).where(ChatMessage.session_id == session_id)
         ).all()
-        assert [message.role for message in messages] == ["user", "assistant"]
+        shared_created_at = messages[0].created_at
+        for message in messages:
+            message.created_at = shared_created_at
+        seeded_session.add(
+            ChatMessage(
+                message_id="msg_system_same_timestamp",
+                session_id=session_id,
+                role="system",
+                content="내부 시스템 메모",
+                ticker="005930",
+                citations=[],
+                safety_flags=[],
+                created_at=shared_created_at,
+            )
+        )
+        seeded_session.commit()
+
+        detail = client.get(f"/v1/me/chat-sessions/{session_id}")
+        assert detail.status_code == 200
+        detail_payload = detail.json()
+        assert detail_payload["session"]["session_id"] == session_id
+        assert detail_payload["session"]["ticker"] == "005930"
+        assert [message["role"] for message in detail_payload["messages"]] == [
+            "user",
+            "assistant",
+            "system",
+        ]
+        assert detail_payload["messages"][0]["content"] == "왜 추천됐나요?"
+        assert detail_payload["messages"][1]["content"] == payload["data"]["answer"]
+        assert detail_payload["messages"][1]["citations"]
+        assert detail_payload["messages"][1]["safety_flags"] == [
+            {"policy_status": "allowed"}
+        ]
+        assert detail_payload["messages"][2]["content"] == "내부 시스템 메모"
+        messages = seeded_session.scalars(
+            select(ChatMessage).where(ChatMessage.session_id == session_id)
+        ).all()
+        assert {message.role for message in messages} == {"user", "assistant", "system"}
         assistant_message = next(message for message in messages if message.role == "assistant")
         assert {"evidence_id", "type", "title", "source_url", "published_at"}.issubset(
             assistant_message.citations[0]
