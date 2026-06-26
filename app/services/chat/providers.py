@@ -356,17 +356,16 @@ def _validate_answer_citations(
     answer: str,
     allowed_evidence_ids: set[str],
 ) -> None:
-    if not allowed_evidence_ids:
-        return
-
     cited_evidence_ids = set(EVIDENCE_ID_REFERENCE_PATTERN.findall(answer))
-    if not cited_evidence_ids:
-        raise ChatProviderUnavailable(
-            "Bedrock chat provider returned an answer without evidence citations."
-        )
-
     unexpected_evidence_ids = cited_evidence_ids - allowed_evidence_ids
     if unexpected_evidence_ids:
         raise ChatProviderUnavailable(
             "Bedrock chat provider returned unsupported evidence citations."
+        )
+    if not allowed_evidence_ids:
+        return
+
+    if not cited_evidence_ids:
+        raise ChatProviderUnavailable(
+            "Bedrock chat provider returned an answer without evidence citations."
         )

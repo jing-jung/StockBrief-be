@@ -397,6 +397,59 @@ def test_chat_bedrock_provider_rejects_unsupported_model_citation(
     assert "unsupported evidence citations" in payload["error"]["message"]
 
 
+def test_chat_bedrock_provider_rejects_invented_citation_without_allowed_evidence() -> None:
+    class FakeBedrockClient:
+        def converse(self, **kwargs):
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": (
+                                    "삼성전자(005930)는 공개 데이터 기준 검토 대상입니다. "
+                                    "[ev_fake] 근거를 확인하세요."
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+
+    provider = BedrockChatProvider(
+        model_id="apac.amazon.nova-micro-v1:0",
+        region_name="ap-northeast-2",
+        client=FakeBedrockClient(),
+    )
+    candidate = RecommendationCandidateResponse(
+        ticker="005930",
+        name="삼성전자",
+        market="KOSPI",
+        sector="반도체",
+        recommendation_score=51.0,
+        score_components=[],
+        recommendation_reasons=[],
+        risk_tags=["근거 확인 필요"],
+        evidence_level="weak",
+        evidence_count=0,
+        missing_data=["evidence"],
+        data_freshness={},
+        disclaimer="이 정보는 투자 조언이 아닙니다.",
+    )
+
+    try:
+        provider.compose(
+            ChatProviderInput(
+                message="왜 추천됐나요?",
+                candidate=candidate,
+                evidence=[],
+            )
+        )
+    except ChatProviderUnavailable as exc:
+        assert "unsupported evidence citations" in str(exc)
+    else:
+        raise AssertionError("invented citations must fail closed")
+
+
 def test_chat_bedrock_provider_requires_model_citation_when_evidence_exists(
     seeded_api_client: TestClient,
     monkeypatch,
