@@ -429,6 +429,9 @@ as a future narrowing candidate in #52. The
 `arn:aws:secretsmanager:<region>:<account-id>:secret:rds!db-*` because RDS
 managed master user password secrets are created under AWS's `rds!db-*` naming
 scheme instead of the StockBrief `stockbrief-<environment>-*` prefix.
+The deploy role also includes a narrow `iam:CreateServiceLinkedRole` permission
+for `AWSServiceRoleForRDS`; first-time DB instance creation in a new AWS account
+can fail without that RDS service-linked role permission.
 
 Terraform refresh also needs read permissions for every managed resource type.
 When ingestion raw archive or provider egress resources are enabled, the deploy

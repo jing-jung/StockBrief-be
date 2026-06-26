@@ -330,6 +330,17 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
       }
     },
     {
+      "Sid": "DeployRdsServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
+      "Condition": {
+        "StringLike": {
+          "iam:AWSServiceName": "rds.amazonaws.com"
+        }
+      }
+    },
+    {
       "Sid": "DeployAwsManagedPolicyRead",
       "Effect": "Allow",
       "Action": "iam:GetPolicy",

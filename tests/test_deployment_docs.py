@@ -567,6 +567,15 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
             ]
         }
     }
+    assert _statement_actions(deploy_policy, "DeployRdsServiceLinkedRole") == {
+        "iam:CreateServiceLinkedRole"
+    }
+    assert _statement_resources(deploy_policy, "DeployRdsServiceLinkedRole") == {
+        "arn:aws:iam::*:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS"
+    }
+    assert _statement(deploy_policy, "DeployRdsServiceLinkedRole")["Condition"] == {
+        "StringLike": {"iam:AWSServiceName": "rds.amazonaws.com"}
+    }
     assert _statement_resources(deploy_policy, "DeployLambdaFunctionByPrefix") == {
         "arn:aws:lambda:${region}:${account_id}:function:${resource_name_prefix}-*"
     }
@@ -676,6 +685,8 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
     assert "managed master user password secrets" in deployment_doc
     assert "AWS's" in deployment_doc
     assert "`rds!db-*` naming" in deployment_doc
+    assert "`iam:CreateServiceLinkedRole`" in deployment_doc
+    assert "`AWSServiceRoleForRDS`" in deployment_doc
     assert "After PR #164 merges" in deployment_doc
     assert "live" in deployment_doc
     assert "deploy role inline policy" in deployment_doc

@@ -444,6 +444,11 @@ plan 후 apply까지 진행한다.
   맞지 않거나, Environment branch rule이 `main`을 허용하지 않는다.
 - `backend account mismatch`:
   deploy role ARN의 계정과 Terraform backend state bucket의 계정이 다르다.
+- `Verify that you have permission to create service linked role`:
+  새 AWS 계정에서 RDS가 `AWSServiceRoleForRDS`를 처음 만들 수 없는 상태다.
+  최신 `scripts/bootstrap_github_oidc.sh`로 bootstrap을 다시 실행해 deploy role에
+  RDS용 `iam:CreateServiceLinkedRole` 권한을 반영한 뒤 같은 `target_env`로
+  workflow를 다시 실행한다.
 - `No such file or directory`:
   `backends/<target_env>.hcl` 또는
   `envs/<target_env>/deploy.auto.tfvars.json` 파일명이 틀렸다.
