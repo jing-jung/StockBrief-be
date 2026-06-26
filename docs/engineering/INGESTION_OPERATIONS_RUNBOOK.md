@@ -389,7 +389,10 @@ Do not enable EventBridge Scheduler until all conditions are true:
   ```
 
 - Both OpenDART and NAVER manual smoke runs have completed with understood
-  results.
+  results. The scheduler gate treats each selected `provider + ticker` pair as
+  ready only after `get_ingestion_status` shows a recent `succeeded` run for
+  that pair. `partial_failed`, `failed`, `started`, or missing runs return the
+  `manual_ingestion_smoke_missing` blocker.
 - Stale `started` ingestion runs have been reviewed with
   `reconcile_stale_ingestion_runs` dry-run and reconciled if needed.
 - `ingestion_runs`, normalized provider tables, `source_documents`, S3 raw

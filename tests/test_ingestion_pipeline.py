@@ -1165,7 +1165,7 @@ def test_check_ingestion_scheduler_enable_gate_blocks_until_all_checks_pass(monk
     )
     monkeypatch.setattr(
         "app.services.ingestion.get_ingestion_status",
-        lambda event: {"ok": True, "summary": {"recent_run_count": 0}},
+        lambda event: {"ok": True, "summary": {"recent_run_count": 0}, "recent_runs": []},
     )
     monkeypatch.setattr(
         "app.services.ingestion.reconcile_stale_ingestion_runs",
@@ -1192,10 +1192,64 @@ def test_check_ingestion_scheduler_enable_gate_blocks_until_all_checks_pass(monk
             "issues": [{"code": "provider_egress_unreachable"}],
         },
         {
+            "code": "manual_ingestion_smoke_missing",
+            "check": "status",
+            "missing_runs": [{"provider": OPENDART_PROVIDER, "ticker": "005930"}],
+        },
+        {
             "code": "stale_ingestion_runs_present",
             "check": "stale_runs",
             "stale_count": 1,
         },
+    ]
+
+
+def test_check_ingestion_scheduler_enable_gate_requires_successful_manual_smoke(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.ingestion.check_ingestion_readiness",
+        lambda: {"ok": True, "issues": []},
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.check_raw_archive_write",
+        lambda: {"ok": True, "issues": []},
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.check_provider_egress",
+        lambda event: {"ok": True, "issues": [], "checks": {"providers": {}}},
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.get_ingestion_status",
+        lambda event: {
+            "ok": True,
+            "summary": {"recent_run_count": 1},
+            "recent_runs": [
+                {
+                    "provider": OPENDART_PROVIDER,
+                    "ticker": "005930",
+                    "status": "partial_failed",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.reconcile_stale_ingestion_runs",
+        lambda event: {"ok": True, "dry_run": True, "stale_count": 0, "issues": []},
+    )
+
+    result = check_ingestion_scheduler_enable_gate(
+        {"providers": [OPENDART_PROVIDER], "tickers": ["005930"]}
+    )
+
+    assert result["ok"] is False
+    assert result["scheduler_enable_ready"] is False
+    assert result["blockers"] == [
+        {
+            "code": "manual_ingestion_smoke_missing",
+            "check": "status",
+            "missing_runs": [{"provider": OPENDART_PROVIDER, "ticker": "005930"}],
+        }
     ]
 
 
@@ -1214,7 +1268,22 @@ def test_check_ingestion_scheduler_enable_gate_passes_when_all_checks_pass(monke
     )
     monkeypatch.setattr(
         "app.services.ingestion.get_ingestion_status",
-        lambda event: {"ok": True, "summary": {"recent_run_count": 2}},
+        lambda event: {
+            "ok": True,
+            "summary": {"recent_run_count": 2},
+            "recent_runs": [
+                {
+                    "provider": OPENDART_PROVIDER,
+                    "ticker": "005930",
+                    "status": "succeeded",
+                },
+                {
+                    "provider": NAVER_PROVIDER,
+                    "ticker": "005930",
+                    "status": "succeeded",
+                },
+            ],
+        },
     )
     monkeypatch.setattr(
         "app.services.ingestion.reconcile_stale_ingestion_runs",

@@ -553,7 +553,11 @@ def check_ingestion_scheduler_enable_gate(event: dict[str, object] | None = None
         "status": status,
         "stale_runs": stale_runs,
     }
-    blockers = _scheduler_enable_gate_blockers(checks)
+    blockers = _scheduler_enable_gate_blockers(
+        checks,
+        providers=providers,
+        tickers=tickers,
+    )
 
     return {
         "ok": not blockers,
@@ -881,7 +885,12 @@ def _provider_egress_selection(event: dict[str, object]) -> tuple[list[str], lis
     return selected, issues
 
 
-def _scheduler_enable_gate_blockers(checks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _scheduler_enable_gate_blockers(
+    checks: dict[str, dict[str, Any]],
+    *,
+    providers: list[str],
+    tickers: list[str],
+) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     for check_name in ("readiness", "raw_archive", "provider_egress", "status", "stale_runs"):
         result = checks[check_name]
@@ -891,6 +900,22 @@ def _scheduler_enable_gate_blockers(checks: dict[str, dict[str, Any]]) -> list[d
                     "code": f"{check_name}_not_ready",
                     "check": check_name,
                     "issues": result.get("issues", []),
+                }
+            )
+
+    status = checks["status"]
+    if status.get("ok") is True:
+        missing_smoke_runs = _missing_successful_manual_smoke_runs(
+            status.get("recent_runs"),
+            providers=providers,
+            tickers=tickers,
+        )
+        if missing_smoke_runs:
+            blockers.append(
+                {
+                    "code": "manual_ingestion_smoke_missing",
+                    "check": "status",
+                    "missing_runs": missing_smoke_runs,
                 }
             )
 
@@ -904,6 +929,29 @@ def _scheduler_enable_gate_blockers(checks: dict[str, dict[str, Any]]) -> list[d
             }
         )
     return blockers
+
+
+def _missing_successful_manual_smoke_runs(
+    recent_runs: object,
+    *,
+    providers: list[str],
+    tickers: list[str],
+) -> list[dict[str, str]]:
+    expected = [
+        {"provider": provider, "ticker": ticker}
+        for provider in providers
+        for ticker in tickers
+    ]
+    if not isinstance(recent_runs, list):
+        return expected
+
+    succeeded = {
+        (str(run.get("provider")), str(run.get("ticker")))
+        for run in recent_runs
+        if isinstance(run, dict)
+        if run.get("status") == "succeeded"
+    }
+    return [run for run in expected if (run["provider"], run["ticker"]) not in succeeded]
 
 
 def _check_provider_endpoint_egress(
