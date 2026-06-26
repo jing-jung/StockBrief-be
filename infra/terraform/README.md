@@ -307,7 +307,17 @@ NEXT_PUBLIC_COGNITO_HOSTED_UI_DOMAIN
 NEXT_PUBLIC_COGNITO_REDIRECT_URI
 ```
 
-`NEXT_PUBLIC_API_BASE_URL` is populated from the API Gateway output in Terraform. For local development, keep using `.env.example`.
+`NEXT_PUBLIC_API_BASE_URL` is populated from the API Gateway output in
+Terraform. For local development against a deployed dev stack, regenerate
+`StockBrief-fe/.env.local` from the active backend outputs:
+
+```bash
+cd ../StockBrief-fe
+npm run sync:dev-env -- --terraform-dir ../StockBrief-be/infra/terraform
+```
+
+The generated `.env.local` contains only public frontend values and must remain
+outside git.
 
 For Terraform-created Amplify apps, AWS requires the Amplify GitHub App to be installed and a GitHub access token to be supplied during app creation. Pass it through `TF_VAR_amplify_access_token`; do not commit it. After the app exists, Terraform ignores `access_token` drift so GitHub Actions can update the app without storing a personal GitHub token as a repository secret.
 

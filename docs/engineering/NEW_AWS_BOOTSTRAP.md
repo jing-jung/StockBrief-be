@@ -503,12 +503,20 @@ BE 배포 전환 절차:
    target_env=<target_env>
    ```
 
-4. Terraform output으로 나온 BE 값을 같은 계정의 FE Amplify 환경 변수에
+4. 로컬 FE smoke가 필요하면 `StockBrief-fe`에서 같은 계정의 BE Terraform
+   output으로 `.env.local`을 갱신한다.
+
+   ```bash
+   npm run sync:dev-env -- --terraform-dir ../StockBrief-be/infra/terraform
+   ```
+
+5. Terraform output으로 나온 BE 값을 같은 계정의 FE Amplify 환경 변수에
    반영한다.
 
 한 계정의 BE output을 다른 계정의 Cognito나 API Gateway 값과 섞어 쓰면
 안 된다. API Gateway, Cognito User Pool, Cognito App Client, Hosted UI domain,
-Amplify environment variable은 모두 같은 target profile에서 나온 값이어야 한다.
+로컬 `.env.local`, Amplify environment variable은 모두 같은 target profile에서
+나온 값이어야 한다.
 
 ## FE Amplify 콘솔 수동 생성 방법
 

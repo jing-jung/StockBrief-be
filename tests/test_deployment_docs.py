@@ -136,6 +136,8 @@ def test_new_aws_bootstrap_documents_manual_amplify_account_switching() -> None:
     assert "NEXT_PUBLIC_COGNITO_USER_POOL_ID=<cognito_user_pool_id>" in bootstrap_doc
     assert "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=<cognito_app_client_id>" in bootstrap_doc
     assert "NEXT_PUBLIC_COGNITO_HOSTED_UI_DOMAIN=<cognito_hosted_ui_domain에서 https:// 제거>" in bootstrap_doc
+    assert "npm run sync:dev-env -- --terraform-dir ../StockBrief-be/infra/terraform" in bootstrap_doc
+    assert "로컬 `.env.local`, Amplify environment variable" in bootstrap_doc
     assert "callback: https://main.<amplify-default-domain>/auth/callback" in bootstrap_doc
     assert "Amplify access token이나" in bootstrap_doc
 
@@ -414,6 +416,15 @@ def test_terraform_readme_documents_external_api_secret_update_runbook() -> None
     assert "Replace `YYYY-MM-DD` with the business date you want to verify" in terraform_readme
     assert "missing_api_key" in terraform_readme
     assert "outbound internet egress" in terraform_readme
+
+
+def test_terraform_readme_documents_frontend_local_env_sync() -> None:
+    terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "npm run sync:dev-env -- --terraform-dir ../StockBrief-be/infra/terraform" in terraform_readme
+    assert "The generated `.env.local` contains only public frontend values" in terraform_readme
 
 
 def test_deployment_bootstrap_documents_dev_cost_pause_and_resume() -> None:
