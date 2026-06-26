@@ -328,6 +328,20 @@ Resume checklist:
   curl -i "$(terraform output -raw api_base_url)/v1/recommendations/candidates?limit=3"
   ```
 
+Current dev resume baseline:
+
+- The active dev profile currently uses `chat_provider = "bedrock"` with
+  `apac.amazon.nova-micro-v1:0`. After a resume that touches Lambda, IAM, or
+  Bedrock settings, run the redacted direct smoke and deployed `/v1/chat` smoke
+  before treating AI explanation work as healthy.
+- The active dev profile currently keeps reviewed OpenDART and NAVER scheduler
+  jobs for ticker `005930` enabled with NAT egress. After a resume that keeps
+  NAT and scheduler on, verify ingestion status for `005930`, confirm recent
+  scheduler runs are `succeeded`, and confirm the DLQ remains empty.
+- If the day's work does not require live provider ingestion, remove NAT egress
+  through Terraform and either pause scheduler jobs in the same reviewed change
+  or document why the reviewed jobs should continue running.
+
 If the no-change plan reports drift after a pause, stop and inspect the drift
 before applying. Do not use `terraform apply` as a blind repair step.
 

@@ -1,9 +1,9 @@
 # Ingestion Operations Runbook
 
-This runbook describes how to manually verify StockBrief provider ingestion in
-the dev AWS account before enabling any scheduled ingestion. It assumes the
-backend Terraform stack already exists and the operator is authenticated with
-the `stockbrief-dev` AWS CLI profile.
+This runbook describes how to manually verify StockBrief provider ingestion and
+how to re-check reviewed scheduled ingestion in the dev AWS account. It assumes
+the backend Terraform stack already exists and the operator is authenticated
+with the `stockbrief-dev` AWS CLI profile.
 
 Do not paste API keys, Secrets Manager values, access tokens, or full provider
 payloads into PR comments, shared logs, or issue comments.
@@ -35,6 +35,10 @@ payloads into PR comments, shared logs, or issue comments.
   schedule, verify `check_ingestion_scheduler_enable_gate`, then apply the
   scheduler change. After NAT egress is turned off, pause the dev scheduler
   again so scheduled jobs do not fail on provider network access.
+  The current dev profile is an exception by review history: after #200 it
+  intentionally keeps OpenDART and NAVER scheduler jobs enabled for ticker
+  `005930` while NAT egress remains enabled. Treat this as active dev
+  current-state preservation, not as the default for a fresh environment.
 - External API credentials are stored in Secrets Manager outside git. Use the
   repository helper so the secret payload is written to a temporary file and
   removed automatically:
@@ -399,12 +403,17 @@ Do not enable EventBridge Scheduler until all conditions are true:
   archive, DLQ, and CloudWatch logs have been checked.
 - Provider rate limits, ticker count, and expected execution frequency have
   been reviewed.
-- The reviewed dev scheduler job list is explicit. For the next scheduled
-  rollout, use `OpenDART` and `NAVER_NEWS` for ticker `005930` with the weekday
-  18:00 KST expression `cron(0 18 ? * MON-FRI *)`. Keep the job list empty in
-  dev tfvars until provider egress and the scheduler gate pass again.
+- The reviewed dev scheduler job list is explicit. The current reviewed dev
+  jobs use `OpenDART` and `NAVER_NEWS` for ticker `005930` with weekday KST
+  expressions `cron(0 18 ? * MON-FRI *)` and
+  `cron(5 18 ? * MON-FRI *)`. For a fresh environment or a scheduler
+  reactivation after pause, keep the job list empty in dev tfvars until
+  provider egress and the scheduler gate pass again.
 - Lambda outbound internet egress is confirmed by `check_provider_egress`.
 - The scheduler change is reviewed in a separate PR.
 
 If any check fails, keep `enable_ingestion_scheduler = false`, record the
-blocking condition, and fix the smallest failing layer first.
+blocking condition, and fix the smallest failing layer first. If the current
+dev scheduler is already enabled and a re-check fails, pause the affected job or
+NAT-dependent schedule in a reviewed Terraform change before continuing
+unattended runs.

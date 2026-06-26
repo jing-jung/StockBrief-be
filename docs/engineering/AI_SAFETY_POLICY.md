@@ -167,6 +167,15 @@ Provider configuration:
   not include the raw model answer; use answer length, a short SHA-256 prefix,
   matched guard terms, and the `likely_false_positive` flag for operations
   triage.
+- Current dev status: after #202/#204, the deployed dev API runs the direct
+  Bedrock provider with `apac.amazon.nova-micro-v1:0`. The post-merge
+  validation path includes the redacted direct Bedrock smoke plus deployed
+  `/v1/chat` smoke, and it must still prove that response shape, policy status,
+  disclaimer, and citation IDs stay within the existing contract.
+- AgentCore Runtime remains deferred. Do not move `/v1/chat` to AgentCore until
+  direct Bedrock shows a concrete need for long-running runtime isolation and a
+  separate review covers ECR image, runtime endpoint, IAM, and observability
+  scope.
 
 ## 8. Safety Validation Checklist
 

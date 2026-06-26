@@ -502,7 +502,8 @@ Terraform creates these ingestion resources:
   networking and raw archive are enabled
 - SQS DLQ with SQS-managed server-side encryption for failed scheduled invocations
 - EventBridge Scheduler only when `enable_ingestion_scheduler = true` and
-  `ingestion_schedule_tickers` is non-empty
+  either `ingestion_schedule_jobs` or the legacy `ingestion_schedule_tickers`
+  input is non-empty
 
 The Lambda receives `INGESTION_RAW_BUCKET` and `EXTERNAL_API_SECRET_ARN`.
 External API secret values must be stored under:
@@ -544,7 +545,7 @@ complete and recorded in the PR body:
   current-state preservation. Do not fold scheduler disablement into the NAT rollback
   unless a separate reviewer-approved scheduler change says so.
 
-Current dev scheduler review evidence for issue #199:
+Current dev scheduler review evidence for issues #199/#200:
 
 - `check_ingestion_smoke.py --providers OpenDART NAVER_NEWS --tickers 000660`
   returned `ready_for_manual_ingestion=true` and `scheduler_enable_ready=true`.
@@ -571,6 +572,14 @@ Current dev scheduler review evidence for issue #199:
   client, and RDS in-place drift. Classify those drift items before apply; do
   not apply if any drift is unexplained or implies replacement, cost, deletion
   protection, backup, or networking changes outside this PR.
+- After #200, the current dev profile intentionally keeps
+  `enable_ingestion_scheduler = true` and `enable_lambda_nat_egress = true` for
+  the reviewed OpenDART/NAVER `005930` jobs. This is current-state
+  preservation for the active dev account, not the default for new accounts.
+- After #204, the post-merge ingestion status snapshot for `005930` showed
+  recent OpenDART and NAVER runs as `succeeded`, latest normalized evidence
+  available, and an empty ingestion DLQ. Re-check these same signals before
+  expanding providers, tickers, or schedule frequency.
 
 Reviewed dev scheduler jobs:
 
@@ -651,11 +660,11 @@ AWS profile routing list and IAM examples. Keep the provider on `mock` unless
 Bedrock model access, expected request volume, and cost are approved for the
 day's validation.
 
-The current dev profile has Bedrock direct chat enabled for issue #201 using
-`apac.amazon.nova-micro-v1:0` in `ap-northeast-2`. Live preflight evidence from
-the dev AWS account returned `ok=true`, `answer_length=36`,
-`answer_sha256_prefix=e483f1699288`, and `matched_terms=[]`; apply the profile
-only while this model access and cost approval remain valid.
+The current dev profile has Bedrock direct chat enabled for issues #201/#202
+using `apac.amazon.nova-micro-v1:0` in `ap-northeast-2`. Post-merge direct
+Bedrock smoke evidence after #204 returned `ok=true`, `answer_length=44`,
+`answer_sha256_prefix=246e9a43b265`, and `matched_terms=[]`; keep the profile
+on Bedrock only while this model access and cost approval remain valid.
 
 Before switching the deployed API to `chat_provider = "bedrock"`, verify that
 the active AWS account can invoke the selected Bedrock model:
@@ -687,8 +696,11 @@ must confirm:
   failures remain fail-closed as `CHAT_PROVIDER_UNAVAILABLE` instead of falling
   back silently to mock output.
 
-Keep `Refs #201` rather than `Closes #201` on the Terraform profile PR until
-this deployed `/v1/chat` evidence is attached.
+The #204 post-merge deployed `/v1/chat` evidence returned HTTP 200, preserved
+the existing response contract, and returned only supported evidence IDs in the
+answer citations. For future Bedrock model, IAM, prompt, or citation guard
+changes, repeat both the redacted direct Bedrock smoke and the deployed
+`/v1/chat` smoke before closing the linked issue.
 
 ## Secrets Manager
 
