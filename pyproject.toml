@@ -26,7 +26,7 @@ stockbrief-seed-mock = "app.seed.seed_mock_data:main"
 [project.optional-dependencies]
 dev = [
   "httpx>=0.27.0,<1.0.0",
-  "pytest>=8.3.0,<9.0.0",
+  "pytest>=8.3.0,<10.0.0",
 ]
 
 [tool.pytest.ini_options]
