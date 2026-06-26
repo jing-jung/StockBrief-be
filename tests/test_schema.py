@@ -1,4 +1,5 @@
 from datetime import date
+import importlib.util
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
@@ -15,6 +16,7 @@ from app.orm import (
 )
 
 API_ROOT = Path(__file__).resolve().parents[1]
+MIGRATION_VERSION_DIR = API_ROOT / "migrations/versions"
 
 
 EXPECTED_TABLES = {
@@ -155,6 +157,42 @@ def test_chat_messages_session_id_index_migration_is_declared() -> None:
     assert 'context.dialect.name == "postgresql"' in migration
     assert "context.autocommit_block()" in migration
     assert "postgresql_concurrently=True" in migration
+
+
+def test_alembic_revision_chain_points_to_existing_revisions() -> None:
+    revisions: dict[str, str | None] = {}
+
+    for path in MIGRATION_VERSION_DIR.glob("*.py"):
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        revision = module.revision
+        down_revision = module.down_revision
+        assert down_revision is None or isinstance(down_revision, str)
+        revisions[revision] = down_revision
+
+    for revision, down_revision in revisions.items():
+        if down_revision is not None:
+            assert down_revision in revisions, f"{revision} points at missing down_revision"
+
+
+def test_alembic_version_table_is_widened_before_long_revision_ids() -> None:
+    widen_migration = (
+        MIGRATION_VERSION_DIR / "0005a_alembic_version_width.py"
+    ).read_text(encoding="utf-8")
+    chat_index_migration = (
+        MIGRATION_VERSION_DIR / "0005_chat_messages_session_id_index.py"
+    ).read_text(encoding="utf-8")
+
+    assert "revision: str = \"0005a_alembic_version_width\"" in widen_migration
+    assert "down_revision: str | None = \"0004_ingestion_input_hash_guard\"" in widen_migration
+    assert '"alembic_version"' in widen_migration
+    assert '"version_num"' in widen_migration
+    assert "sa.String(length=255)" in widen_migration
+    assert "down_revision: str | None = \"0005a_alembic_version_width\"" in chat_index_migration
 
 
 def test_db_schema_documents_input_hash_migration_precheck() -> None:
