@@ -38,7 +38,7 @@ jobs:
     env:
       TARGET_ENV: ${{ github.event.inputs.target_env || 'dev' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve deploy profile
         id: deploy-profile
@@ -136,7 +136,7 @@ jobs:
           print(f"deploy_role_arn={role_arn}")
           PY
 
-      - uses: aws-actions/configure-aws-credentials@v5
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ steps.deploy-profile.outputs.deploy_role_arn }}
           aws-region: ${{ env.AWS_REGION }}

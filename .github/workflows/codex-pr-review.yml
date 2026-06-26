@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check PR template completeness
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const prNumber = context.eventName === 'workflow_dispatch'
@@ -108,7 +108,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Comment @codex review
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const prNumber = context.eventName === 'workflow_dispatch'
