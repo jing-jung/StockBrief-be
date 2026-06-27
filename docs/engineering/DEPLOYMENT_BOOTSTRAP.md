@@ -328,6 +328,22 @@ Resume checklist:
   curl -i "$(terraform output -raw api_base_url)/v1/recommendations/candidates?limit=3"
   ```
 
+- After a hosted Cognito callback or Amplify domain change, verify the hosted
+  auth path with a short-lived bearer token from the signed-in browser session:
+
+  ```bash
+  export STOCKBRIEF_HOSTED_URL="https://main.d20hgo2k8atldu.amplifyapp.com"
+  export STOCKBRIEF_API_BASE_URL="$(terraform output -raw api_base_url)/v1"
+  export STOCKBRIEF_AUTH_BEARER_TOKEN="REPLACE_WITH_SHORT_LIVED_TOKEN"
+
+  .venv/bin/python scripts/check_hosted_auth_smoke.py
+  ```
+
+  The helper checks `/`, `/account`, `/auth/callback`, `GET /v1/me`,
+  `GET /v1/me/preferences`, and `GET /v1/me/chat-sessions`. PR evidence should
+  include only the redacted JSON result. Do not paste the bearer token, email, or
+  raw response body.
+
 Current dev resume baseline:
 
 - The active dev profile currently uses `chat_provider = "bedrock"` with

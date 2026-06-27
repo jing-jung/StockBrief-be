@@ -89,6 +89,21 @@ def test_bedrock_chat_smoke_runbook_documents_redacted_validation() -> None:
     assert "answer_sha256_prefix" in script
 
 
+def test_hosted_auth_smoke_runbook_documents_redacted_validation() -> None:
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+    script = (REPOSITORY_ROOT / "scripts/check_hosted_auth_smoke.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/check_hosted_auth_smoke.py" in deployment_doc
+    assert "STOCKBRIEF_AUTH_BEARER_TOKEN" in deployment_doc
+    assert "Do not paste the bearer token, email, or" in deployment_doc
+    assert "DEFAULT_AUTH_API_PATHS" in script
+    assert "/v1/me/chat-sessions" in script
+
+
 def test_backend_dev_deploy_checks_assumed_account_matches_backend() -> None:
     workflow = (
         REPOSITORY_ROOT / ".github/workflows/backend-dev-deploy.yml"
