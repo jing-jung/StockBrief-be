@@ -35,10 +35,10 @@ payloads into PR comments, shared logs, or issue comments.
   schedule, verify `check_ingestion_scheduler_enable_gate`, then apply the
   scheduler change. After NAT egress is turned off, pause the dev scheduler
   again so scheduled jobs do not fail on provider network access.
-  The current dev profile is an exception by review history: after #200 it
-  intentionally keeps OpenDART and NAVER scheduler jobs enabled for ticker
-  `005930` while NAT egress remains enabled. Treat this as active dev
-  current-state preservation, not as the default for a fresh environment.
+  The current dev profile keeps the reviewed OpenDART and NAVER scheduler job
+  definitions for ticker `005930`, but #214 pauses `enable_ingestion_scheduler`
+  and `enable_lambda_nat_egress` by default. Treat the job definitions as
+  reactivation inputs, not as permission to run unattended provider calls.
 - External API credentials are stored in Secrets Manager outside git. Use the
   repository helper so the secret payload is written to a temporary file and
   removed automatically:
@@ -406,9 +406,9 @@ Do not enable EventBridge Scheduler until all conditions are true:
 - The reviewed dev scheduler job list is explicit. The current reviewed dev
   jobs use `OpenDART` and `NAVER_NEWS` for ticker `005930` with weekday KST
   expressions `cron(0 18 ? * MON-FRI *)` and
-  `cron(5 18 ? * MON-FRI *)`. For a fresh environment or a scheduler
-  reactivation after pause, keep the job list empty in dev tfvars until
-  provider egress and the scheduler gate pass again.
+  `cron(5 18 ? * MON-FRI *)`. After #214, those jobs stay in tfvars but
+  `enable_ingestion_scheduler` stays `false` until provider egress and the
+  scheduler gate pass again for the next live ingestion window.
 - Lambda outbound internet egress is confirmed by `check_provider_egress`.
 - The scheduler change is reviewed in a separate PR.
 

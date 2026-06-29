@@ -39,10 +39,10 @@ and summarize only status fields.
 | Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true`, model `apac.amazon.nova-micro-v1:0`, `matched_terms=[]`. | Keep AgentCore Runtime out of this phase. |
 | Deployed chat explanation | 완료 | `POST /v1/chat` returned `success=true`, `bedrock Agent` response, `policy_action=ALLOW`, citation count `2`. | Re-run after Lambda, IAM, or Bedrock config changes. |
 | Live ingestion readiness | 완료 | `scripts/check_ingestion_smoke.py` returned `ok=true`, `ready_for_manual_ingestion=true`, `scheduler_enable_ready=true`. | Manual provider ingest is not re-run in this audit to avoid unnecessary provider calls. |
-| Ingestion scheduler | 완료 | EventBridge Scheduler jobs are enabled for OpenDART and NAVER_NEWS on ticker `005930`. | Keep enabled only while reviewed live ingestion development is active. |
+| Ingestion scheduler | 완료 | The audit found EventBridge Scheduler jobs enabled for OpenDART and NAVER_NEWS on ticker `005930`; #214 pauses the scheduler while preserving reviewed job definitions in tfvars. | Re-enable only for a reviewed live ingestion window. |
 | Ingestion ledger and evidence | 완료 | Status snapshot showed `started=0`, `succeeded=10`, `failed=0`, latest evidence count `10`. | Investigate only if future runs show stale `started` rows or failures. |
 | DLQ | 완료 | SQS attributes showed `ApproximateNumberOfMessages=0`, not visible `0`, delayed `0`. | Check after every scheduler or manual ingestion smoke. |
-| NAT cost state | 우리 후속 필요 | NAT Gateway `nat-0c302c1bf173385d2` is `available`; `enable_lambda_nat_egress=true`. | Leave on only when live provider ingestion work continues; otherwise remove through reviewed Terraform change. |
+| NAT cost state | 우리 후속 필요 | The audit found NAT Gateway `nat-0c302c1bf173385d2` available; #214 sets `enable_lambda_nat_egress=false` for the next reviewed apply. | Re-enable only when live provider ingestion work continues. |
 | Terraform no-change plan | 우리 후속 필요 | `terraform plan -detailed-exitcode` exited `2`; do not apply as-is. | Re-run with the same operational alarm email input used by deploy, and with the intended Lambda package artifact, then classify any remaining drift. |
 | Full hosted auth API smoke | 다른 팀원 담당 이후 재검증 | Page-only hosted smoke passed without `STOCKBRIEF_AUTH_BEARER_TOKEN`. | After FE auth callback work is merged, run full `check_hosted_auth_smoke.py` with a short-lived token and redact output. |
 | FE detail/recommendation display | 다른 팀원 담당 | FE-BE connection implementation is explicitly out of this PR. | Resume product flow validation after that PR merges. |
@@ -220,23 +220,39 @@ Track Terraform drift classification and NAT/scheduler cost posture in follow-up
 issue `#214`; this audit PR records the current state and must not apply those
 infrastructure changes.
 
+Follow-up decision for #214:
+
+- Use `scripts/check_dev_terraform_plan.sh` with the reviewed operational alarm
+  recipient input before every dev apply.
+- Pause `enable_lambda_nat_egress` and `enable_ingestion_scheduler` while no
+  live provider ingestion work is active.
+- Keep the reviewed OpenDART/NAVER `005930` job definitions in tfvars as
+  reactivation inputs.
+- Re-enable NAT and scheduler only in a reviewed PR after provider egress,
+  scheduler gate, DLQ, and recent manual ingestion evidence are refreshed.
+- Treat remaining Amplify, Cognito, RDS, and Lambda package hash in-place drift
+  as separate classification work. Do not fold those into the NAT/scheduler cost
+  pause unless the PR body explains each item.
+
 ## Cost And Resume Decision
 
-Current cost-sensitive state:
+Current cost-sensitive state after #214 is applied:
 
 - RDS is running and available.
-- NAT Gateway is running and available.
-- Scheduler jobs are enabled.
+- NAT Gateway is removed by Terraform unless a live provider ingestion window is
+  active.
+- Scheduler jobs remain defined in tfvars but are not created while
+  `enable_ingestion_scheduler=false`.
 - RDS Proxy is disabled.
 - AgentCore Runtime is disabled.
 
 Decision rule:
 
-- If live provider ingestion development continues today, keep NAT and scheduler
-  enabled and re-check ingestion status plus DLQ after each scheduler window.
-- If no live provider ingestion work remains, open a separate reviewed PR to
-  set `enable_lambda_nat_egress=false` and either pause scheduler jobs or record
-  why they should remain enabled. Track that decision in follow-up issue `#214`.
+- If live provider ingestion development resumes, re-enable NAT and scheduler
+  in a reviewed PR and re-check ingestion status plus DLQ after each scheduler
+  window.
+- If no live provider ingestion work remains, keep
+  `enable_lambda_nat_egress=false` and `enable_ingestion_scheduler=false`.
 - Do not delete Terraform-managed resources from the AWS console.
 
 ## Completion Gate For Next Feature Work

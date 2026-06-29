@@ -152,21 +152,21 @@ def test_dev_account_transition_requires_backend_deploy_result_on_issue_52() -> 
     assert "record the success or expected guard failure on #52" in terraform_readme
 
 
-def test_dev_scheduler_uses_reviewed_nat_egress_after_provider_smoke() -> None:
+def test_dev_scheduler_preserves_reviewed_reactivation_inputs_while_paused() -> None:
     deploy_tfvars = json.loads(_read("envs/dev/deploy.auto.tfvars.json"))
     terraform_readme = _read("README.md")
     ingestion_runbook = (REPOSITORY_ROOT / "docs/engineering/INGESTION_OPERATIONS_RUNBOOK.md").read_text(
         encoding="utf-8"
     )
 
-    assert deploy_tfvars["enable_lambda_nat_egress"] is True
+    assert deploy_tfvars["enable_lambda_nat_egress"] is False
     assert deploy_tfvars["lambda_nat_public_subnet_id"] == "subnet-0c816842b11dfd2e7"
     assert deploy_tfvars["lambda_nat_public_subnet_id"] not in deploy_tfvars["lambda_nat_route_subnet_ids"]
     assert deploy_tfvars["lambda_nat_route_subnet_ids"] == [
         "subnet-08d89333a3c3e2924",
         "subnet-0e10680a556fa9ca8",
     ]
-    assert deploy_tfvars["enable_ingestion_scheduler"] is True
+    assert deploy_tfvars["enable_ingestion_scheduler"] is False
     assert deploy_tfvars["ingestion_schedule_jobs"] == [
         {
             "provider": "OpenDART",
@@ -179,10 +179,11 @@ def test_dev_scheduler_uses_reviewed_nat_egress_after_provider_smoke() -> None:
             "schedule_expression": "cron(5 18 ? * MON-FRI *)",
         },
     ]
-    assert "live ingestion smoke window" in terraform_readme
-    assert "pause the dev scheduler again" in terraform_readme
-    assert "Keep it `false`" in ingestion_runbook
-    assert "while Lambda provider egress is unavailable" in ingestion_runbook
+    assert "reviewed NAT subnet IDs in tfvars" in terraform_readme
+    assert "After #214" in terraform_readme
+    assert "reviewed reactivation inputs" in terraform_readme
+    assert "After #214" in ingestion_runbook
+    assert "`enable_ingestion_scheduler` stays `false`" in ingestion_runbook
     assert "check_ingestion_scheduler_enable_gate" in ingestion_runbook
     assert "scheduler reactivation plan evidence for #199/#200" in terraform_readme
     assert "planned 6 scheduler additions" in terraform_readme
@@ -338,7 +339,7 @@ def test_ingestion_pipeline_resources_are_wired_with_scheduler_disabled_by_defau
     assert 'output "ingestion_dlq_url"' in outputs_tf
     assert 'output "ingestion_scheduler_names"' in outputs_tf
     assert "enable_ingestion_scheduler          = false" in dev_tfvars
-    assert deploy_tfvars["enable_ingestion_scheduler"] is True
+    assert deploy_tfvars["enable_ingestion_scheduler"] is False
     assert [job["provider"] for job in deploy_tfvars["ingestion_schedule_jobs"]] == [
         "OpenDART",
         "NAVER_NEWS",
@@ -397,8 +398,9 @@ def test_dev_live_provider_nat_egress_uses_non_overlapping_subnets() -> None:
         assert nat_route_subnet_ids
         assert nat_public_subnet_id not in nat_route_subnet_ids
     else:
-        assert nat_public_subnet_id == ""
-        assert nat_route_subnet_ids == []
+        assert nat_public_subnet_id
+        assert nat_route_subnet_ids
+        assert nat_public_subnet_id not in nat_route_subnet_ids
 
     assert "enable_lambda_nat_egress" in terraform_readme
     assert "lambda_nat_public_subnet_id" in terraform_readme

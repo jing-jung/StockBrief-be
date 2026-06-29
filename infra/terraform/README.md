@@ -374,7 +374,7 @@ lambda_nat_route_subnet_ids = [
 Current dev live ingestion settings:
 
 ```hcl
-enable_lambda_nat_egress    = true
+enable_lambda_nat_egress    = false
 lambda_nat_public_subnet_id = "subnet-0c816842b11dfd2e7"
 lambda_nat_route_subnet_ids = [
   "subnet-08d89333a3c3e2924",
@@ -382,10 +382,15 @@ lambda_nat_route_subnet_ids = [
 ]
 ```
 
-The current dev NAT public subnet is intentionally not included in
-`lambda_nat_route_subnet_ids`. A live smoke on 2026-06-26 observed
-`nat-0c302c1bf173385d2` as `available` and the S3 Gateway endpoint attached to
-both the original route table and the Terraform-managed NAT route table.
+The current dev profile keeps the reviewed NAT subnet IDs in tfvars for the
+next live ingestion window, but #214 pauses NAT egress by default to stop NAT
+Gateway hourly charges while no live provider work is running. The NAT public
+subnet is intentionally not included in `lambda_nat_route_subnet_ids`. A live
+smoke on 2026-06-26 observed `nat-0c302c1bf173385d2` as `available` and the S3
+Gateway endpoint attached to both the original route table and the
+Terraform-managed NAT route table. After #214 is applied, that NAT Gateway,
+Elastic IP, NAT route table, private subnet route table associations, and the
+extra S3 Gateway endpoint route table attachment are expected to be removed.
 
 The public NAT subnet must keep a route to the VPC Internet Gateway. The route
 subnet IDs are associated with a Terraform-managed private route table whose
@@ -548,8 +553,8 @@ complete and recorded in the PR body:
   `ingestion_schedule_provider` and `ingestion_schedule_tickers` variables are
   used only when `ingestion_schedule_jobs` is empty.
   If the dev tfvars already contain reviewed scheduler jobs, keep those jobs as
-  current-state preservation. Do not fold scheduler disablement into the NAT rollback
-  unless a separate reviewer-approved scheduler change says so.
+  reviewed reactivation inputs. Keep `enable_ingestion_scheduler = false` until
+  a reviewer-approved scheduler change says live provider runs should resume.
 
 Current dev scheduler review evidence for issues #199/#200:
 
@@ -578,10 +583,11 @@ Current dev scheduler review evidence for issues #199/#200:
   client, and RDS in-place drift. Classify those drift items before apply; do
   not apply if any drift is unexplained or implies replacement, cost, deletion
   protection, backup, or networking changes outside this PR.
-- After #200, the current dev profile intentionally keeps
-  `enable_ingestion_scheduler = true` and `enable_lambda_nat_egress = true` for
-  the reviewed OpenDART/NAVER `005930` jobs. This is current-state
-  preservation for the active dev account, not the default for new accounts.
+- After #214, the current dev profile intentionally keeps the reviewed
+  OpenDART/NAVER `005930` job definitions in tfvars but sets
+  `enable_ingestion_scheduler = false` and `enable_lambda_nat_egress = false`.
+  This pauses unattended provider calls and NAT Gateway cost while preserving a
+  clear reactivation path for the next live ingestion window.
 - After #204, the post-merge ingestion status snapshot for `005930` showed
   recent OpenDART and NAVER runs as `succeeded`, latest normalized evidence
   available, and an empty ingestion DLQ. Re-check these same signals before

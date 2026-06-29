@@ -359,13 +359,13 @@ Current dev resume baseline:
   `apac.amazon.nova-micro-v1:0`. After a resume that touches Lambda, IAM, or
   Bedrock settings, run the redacted direct smoke and deployed `/v1/chat` smoke
   before treating AI explanation work as healthy.
-- The active dev profile currently keeps reviewed OpenDART and NAVER scheduler
-  jobs for ticker `005930` enabled with NAT egress. After a resume that keeps
-  NAT and scheduler on, verify ingestion status for `005930`, confirm recent
+- After #214, the active dev profile keeps the reviewed OpenDART and NAVER job
+  definitions for ticker `005930`, but NAT egress and EventBridge Scheduler are
+  paused by default. Re-enable both only when the day's work includes live
+  provider ingestion, then verify ingestion status for `005930`, confirm recent
   scheduler runs are `succeeded`, and confirm the DLQ remains empty.
-- If the day's work does not require live provider ingestion, remove NAT egress
-  through Terraform and either pause scheduler jobs in the same reviewed change
-  or document why the reviewed jobs should continue running.
+- If the day's work does not require live provider ingestion, keep
+  `enable_lambda_nat_egress = false` and `enable_ingestion_scheduler = false`.
 
 If the no-change plan reports drift after a pause, stop and inspect the drift
 before applying. Do not use `terraform apply` as a blind repair step.

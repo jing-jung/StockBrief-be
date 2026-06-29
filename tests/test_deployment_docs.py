@@ -289,7 +289,7 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "enable_lambda_nat_egress=false" in audit_doc
     assert "terraform plan -var-file=envs/dev/deploy.auto.tfvars.json -detailed-exitcode" in audit_doc
     assert "Do not apply this plan as-is" in audit_doc
-    assert "follow-up issue `#214`" in audit_doc
+    assert "issue `#214`" in audit_doc
     assert "operational_alarm_email_addresses" in audit_doc
     assert "AgentCore Runtime is disabled" in audit_doc
 
@@ -660,9 +660,59 @@ def test_ingestion_scheduler_enable_gate_documents_live_provider_prerequisites()
     assert "rate-limit" in scheduler_gate
     assert "data freshness" in scheduler_gate
     assert "ingestion_schedule_jobs" in scheduler_gate
-    assert "current-state preservation" in scheduler_gate
-    assert "NAT rollback" in scheduler_gate
+    assert "reviewed reactivation inputs" in scheduler_gate
+    assert "After #214" in scheduler_gate
     assert "keep the scheduler disabled" in scheduler_gate
+
+
+def test_dev_tfvars_pause_nat_and_scheduler_but_keep_reviewed_jobs() -> None:
+    dev_tfvars = json.loads(
+        (
+            REPOSITORY_ROOT / "infra/terraform/envs/dev/deploy.auto.tfvars.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert dev_tfvars["enable_lambda_nat_egress"] is False
+    assert dev_tfvars["enable_ingestion_scheduler"] is False
+    assert dev_tfvars["lambda_nat_public_subnet_id"] == "subnet-0c816842b11dfd2e7"
+    assert dev_tfvars["lambda_nat_route_subnet_ids"] == [
+        "subnet-08d89333a3c3e2924",
+        "subnet-0e10680a556fa9ca8",
+    ]
+    assert dev_tfvars["ingestion_schedule_jobs"] == [
+        {
+            "provider": "OpenDART",
+            "tickers": ["005930"],
+            "schedule_expression": "cron(0 18 ? * MON-FRI *)",
+        },
+        {
+            "provider": "NAVER_NEWS",
+            "tickers": ["005930"],
+            "schedule_expression": "cron(5 18 ? * MON-FRI *)",
+        },
+    ]
+
+
+def test_dev_cost_pause_decision_is_documented() -> None:
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
+    terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
+        encoding="utf-8"
+    )
+    audit_doc = (
+        REPOSITORY_ROOT / "docs/engineering/CLOUD_DEV_COMPLETION_AUDIT.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (deployment_doc, terraform_readme, audit_doc):
+        assert "After #214" in text or "after #214" in text
+        assert "enable_lambda_nat_egress" in text
+        assert "enable_ingestion_scheduler" in text
+
+    assert "paused by default" in deployment_doc
+    assert "hourly charges" in terraform_readme
+    assert "reactivation inputs" in audit_doc
+    assert "remaining Amplify, Cognito, RDS, and Lambda package hash" in audit_doc
 
 
 def test_terraform_readme_documents_external_api_secret_update_runbook() -> None:
