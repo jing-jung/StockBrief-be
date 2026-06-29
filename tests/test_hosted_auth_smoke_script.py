@@ -52,6 +52,24 @@ class FakeFetcher:
                     }
                 ).encode("utf-8"),
             )
+        if url.endswith("/me/watchlist"):
+            return smoke.HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {
+                        "data": {
+                            "count": 1,
+                            "items": [
+                                {
+                                    "ticker": "005930",
+                                    "name": "삼성전자",
+                                    "memo": "비공개 관심종목 메모",
+                                }
+                            ],
+                        }
+                    }
+                ).encode("utf-8"),
+            )
         if url.endswith("/me/chat-sessions"):
             return smoke.HttpResponse(
                 status_code=200,
@@ -91,6 +109,9 @@ def test_hosted_auth_smoke_redacts_token_email_and_raw_response(monkeypatch) -> 
     assert "secret-token" not in serialized
     assert "user@example.com" not in serialized
     assert "should-not-print" not in serialized
+    assert "005930" not in serialized
+    assert "삼성전자" not in serialized
+    assert "비공개 관심종목 메모" not in serialized
     assert "비공개 대화" not in serialized
     assert result["checks"]["auth_api:/v1/me"]["summary"] == {
         "authenticated": True,
@@ -101,6 +122,7 @@ def test_hosted_auth_smoke_redacts_token_email_and_raw_response(monkeypatch) -> 
     assert result["checks"]["auth_api:/v1/me/preferences"]["summary"] == {
         "preference_keys": ["notifications", "risk_profile"]
     }
+    assert result["checks"]["auth_api:/v1/me/watchlist"]["summary"] == {"item_count": 1}
     assert result["checks"]["auth_api:/v1/me/chat-sessions"]["summary"] == {"count": 2}
     auth_headers = [headers for _, headers, _ in fetcher.calls[3:]]
     assert all(headers.get("Authorization") == "Bearer secret-token" for headers in auth_headers)

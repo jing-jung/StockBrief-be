@@ -13,7 +13,12 @@ from urllib.parse import urljoin, urlparse
 
 
 DEFAULT_HOSTED_PATHS = ("/", "/account", "/auth/callback")
-DEFAULT_AUTH_API_PATHS = ("/v1/me", "/v1/me/preferences", "/v1/me/chat-sessions")
+DEFAULT_AUTH_API_PATHS = (
+    "/v1/me",
+    "/v1/me/preferences",
+    "/v1/me/watchlist",
+    "/v1/me/chat-sessions",
+)
 DEFAULT_TOKEN_ENV = "STOCKBRIEF_AUTH_BEARER_TOKEN"
 
 Fetch = Callable[[str, dict[str, str], float], "HttpResponse"]
@@ -267,6 +272,8 @@ def summarize_api_response(path: str, body: dict[str, Any]) -> dict[str, Any]:
                 if key in {"markets", "notifications", "risk_profile", "sectors"}
             )
             return {"preference_keys": safe_keys}
+    if path == "/v1/me/watchlist" and isinstance(data, dict):
+        return {"item_count": count_from_response(data)}
     if path == "/v1/me/chat-sessions" and isinstance(data, dict):
         return {"count": number_or_none(data.get("count"))}
     return {"response_shape": "recognized" if isinstance(data, (dict, list)) else "unknown"}
@@ -296,6 +303,14 @@ def extract_error_code(body: dict[str, Any]) -> str | None:
 
 def number_or_none(value: object) -> int | None:
     return value if isinstance(value, int) else None
+
+
+def count_from_response(data: dict[str, Any]) -> int | None:
+    count = number_or_none(data.get("count"))
+    if count is not None:
+        return count
+    items = data.get("items")
+    return len(items) if isinstance(items, list) else None
 
 
 if __name__ == "__main__":

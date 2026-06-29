@@ -349,9 +349,10 @@ Resume checklist:
   ```
 
   The helper checks `/`, `/account`, `/auth/callback`, `GET /v1/me`,
-  `GET /v1/me/preferences`, and `GET /v1/me/chat-sessions`. PR evidence should
-  include only the redacted JSON result. Do not paste the bearer token, email, or
-  raw response body.
+  `GET /v1/me/preferences`, `GET /v1/me/watchlist`, and
+  `GET /v1/me/chat-sessions`. PR evidence should include only the redacted JSON
+  result. Do not paste the bearer token, email, or raw response body. Do not
+  paste watchlist item bodies.
 
 Current dev resume baseline:
 

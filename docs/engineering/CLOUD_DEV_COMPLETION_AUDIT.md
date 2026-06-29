@@ -117,8 +117,9 @@ export STOCKBRIEF_AUTH_BEARER_TOKEN="REPLACE_WITH_SHORT_LIVED_TOKEN"
 uv run python scripts/check_hosted_auth_smoke.py
 ```
 
-Only paste the redacted JSON result. Never paste the bearer token, email, or raw
-protected API response body.
+This checks `/v1/me`, `/v1/me/preferences`, `/v1/me/watchlist`, and
+`/v1/me/chat-sessions`. Only paste the redacted JSON result. Never paste the
+bearer token, email, watchlist item body, or raw protected API response body.
 
 ### Ingestion smoke
 
