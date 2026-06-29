@@ -285,23 +285,26 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     ).read_text(encoding="utf-8")
 
     assert "# Cloud Dev Completion Audit" in audit_doc
-    assert "Linked issue: `#211`" in audit_doc
+    assert "Linked issues: `#211`, `#226`" in audit_doc
     assert "FE-to-BE integration" in audit_doc
     assert "toolchain migration" in audit_doc
-    assert "다른 팀원" in audit_doc
+    assert "Other teammate" in audit_doc
     assert "완료" in audit_doc
-    assert "다른 팀원 담당" in audit_doc
-    assert "우리 후속 필요" in audit_doc
 
     assert "`GET /v1/health`" in audit_doc
     assert "`GET /v1/recommendations/candidates?limit=3`" in audit_doc
     assert "`POST /v1/chat`" in audit_doc
     assert "scripts/check_bedrock_chat_smoke.py" in audit_doc
     assert "scripts/check_hosted_auth_smoke.py --skip-auth-api" in audit_doc
+    assert "BE #225 captured a full hosted auth API smoke" in audit_doc
+    assert "the temporary Cognito smoke user was deleted after the run" in audit_doc
+    assert "pnpm run smoke:hosted-evidence -- --ticker 005930" in audit_doc
+    assert "FE #104 merged the hosted live evidence visibility smoke" in audit_doc
     assert "scripts/check_ingestion_smoke.py" in audit_doc
     assert "matched_terms=[]" in audit_doc
     assert "ready_for_manual_ingestion=true" in audit_doc
     assert "scheduler_enable_ready=true" in audit_doc
+    assert "Current AWS checks returned no provider ingestion schedules" in audit_doc
     assert "ApproximateNumberOfMessages=0" in audit_doc or "DLQ visible messages: `0`" in audit_doc
 
     assert "NAT Gateway" in audit_doc
@@ -310,6 +313,8 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "Do not apply this plan as-is" in audit_doc
     assert "This #221 follow-up records the current reviewed Terraform drift baseline" in audit_doc
     assert "NAT/scheduler cost posture decided in #214" in audit_doc
+    assert "provider ingestion schedules: `[]`" in audit_doc
+    assert "Terraform-managed NAT Gateways: `[]`" in audit_doc
     assert "operational_alarm_email_addresses" in audit_doc
     assert "AgentCore Runtime is disabled" in audit_doc
 

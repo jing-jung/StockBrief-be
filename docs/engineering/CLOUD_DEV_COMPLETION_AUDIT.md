@@ -7,7 +7,7 @@ implementation because those are owned by other teammates.
 Audit date: 2026-06-29
 AWS account: `560271561793`
 Region: `ap-northeast-2`
-Linked issue: `#211`
+Linked issues: `#211`, `#226`
 
 Do not paste API keys, access tokens, secret values, raw provider payloads, raw
 model answers, or user emails into PR evidence. Use the redacted helper outputs
@@ -28,24 +28,24 @@ and summarize only status fields.
 
 | Category | Status | Evidence | Next action |
 | --- | --- | --- | --- |
-| Latest main baseline | 완료 | BE `main` fast-forwarded to `25a281b`; FE `main` fast-forwarded to `be3ca4e`. | Start all new work from latest `main`. |
+| Latest main baseline | 완료 | BE `main` fast-forwarded to `b536afa`; FE `main` fast-forwarded to `f2d11e9`. | Start all new work from latest `main`. |
 | Terraform state access | 완료 | `AWS_PROFILE=stockbrief-dev terraform init -reconfigure -backend-config=backends/dev.hcl -input=false` succeeded. | Keep using `backends/dev.hcl` for local dev state checks. |
 | API Gateway and Lambda API | 완료 | `GET /v1/health` returned `status=ok`, `service=stockbrief-api`, `environment=dev`. | Continue using deployed smoke before release or after resume. |
-| Recommendation API | 완료 | `GET /v1/recommendations/candidates?limit=3` returned `count=3`, first ticker `005930`, evidence level `medium`, evidence count `42`. | FE display validation waits for the teammate-owned FE-BE connection work. |
-| Cognito | 완료 | Terraform outputs include user pool `ap-northeast-2_VPOccT5rI`, issuer, app client, and Hosted UI domain. | Full hosted auth API smoke still needs a short-lived bearer token after a signed-in browser session. |
-| Amplify hosted pages | 완료 | Hosted page smoke for `/`, `/account`, and `/auth/callback` returned HTTP 200 at `https://main.d20hgo2k8atldu.amplifyapp.com`. | FE-BE integration remains external to this PR. |
+| Recommendation API | 완료 | `GET /v1/recommendations/candidates?limit=3` returned `count=3`, first ticker `005930`, evidence level `medium`, evidence count `42`. | Re-run deployed API smoke after recommendation, ingestion, or Lambda deploy changes. |
+| Cognito | 완료 | Terraform outputs include user pool `ap-northeast-2_VPOccT5rI`, issuer, app client, and Hosted UI domain; BE #225 verified the full protected API smoke with a short-lived token. | Re-run full hosted auth smoke after Cognito, callback, account API, or Amplify domain changes. |
+| Amplify hosted pages | 완료 | Hosted page smoke for `/`, `/account`, and `/auth/callback` returned HTTP 200 at `https://main.d20hgo2k8atldu.amplifyapp.com`. | Re-run hosted page smoke after FE deploy or Amplify config changes. |
 | RDS | 완료 | `stockbrief-dev-postgres` is `available`, PostgreSQL `16.13`, deletion protection `false`, backup retention `1`. | Stop RDS during inactive cost windows per `DEPLOYMENT_BOOTSTRAP.md`. |
 | RDS Proxy | 완료 | Terraform output `rds_proxy_endpoint` is empty and `enable_rds_proxy=false`. | Keep disabled until Lambda concurrency requires pooling. |
 | Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true`, model `apac.amazon.nova-micro-v1:0`, `matched_terms=[]`. | Keep AgentCore Runtime out of this phase. |
 | Deployed chat explanation | 완료 | `POST /v1/chat` returned `success=true`, `bedrock Agent` response, `policy_action=ALLOW`, citation count `2`. | Re-run after Lambda, IAM, or Bedrock config changes. |
 | Live ingestion readiness | 완료 | `scripts/check_ingestion_smoke.py` returned `ok=true`, `ready_for_manual_ingestion=true`, `scheduler_enable_ready=true`. | Manual provider ingest is not re-run in this audit to avoid unnecessary provider calls. |
-| Ingestion scheduler | 완료 | The audit found EventBridge Scheduler jobs enabled for OpenDART and NAVER_NEWS on ticker `005930`; #214 pauses the scheduler while preserving reviewed job definitions in tfvars. | Re-enable only for a reviewed live ingestion window. |
+| Ingestion scheduler | 완료 | Current AWS checks returned no provider ingestion schedules; the reviewed OpenDART and NAVER `005930` job definitions remain in tfvars while `enable_ingestion_scheduler=false`. | Re-enable only for a reviewed live ingestion window. |
 | Ingestion ledger and evidence | 완료 | Status snapshot showed `started=0`, `succeeded=10`, `failed=0`, latest evidence count `10`. | Investigate only if future runs show stale `started` rows or failures. |
 | DLQ | 완료 | SQS attributes showed `ApproximateNumberOfMessages=0`, not visible `0`, delayed `0`. | Check after every scheduler or manual ingestion smoke. |
-| NAT cost state | 우리 후속 필요 | The audit found NAT Gateway `nat-0c302c1bf173385d2` available; #214 sets `enable_lambda_nat_egress=false` for the next reviewed apply. | Re-enable only when live provider ingestion work continues. |
+| NAT and scheduler cost state | 완료 | Current read-only AWS checks returned no Terraform-managed NAT Gateway and no provider ingestion schedules; tfvars keep `enable_lambda_nat_egress=false` and `enable_ingestion_scheduler=false`. | Re-enable only when live provider ingestion work continues. |
 | Terraform drift classification | 완료 | `scripts/check_dev_terraform_plan.sh` with the reviewed alarm recipient input exited `2` with `0 to add, 5 to change, 0 to destroy`; all five in-place changes are classified below. | Do not apply blindly; use the classified drift as the reviewed baseline before the next deploy PR. |
-| Full hosted auth API smoke | 다른 팀원 담당 이후 재검증 | Page-only hosted smoke passed without `STOCKBRIEF_AUTH_BEARER_TOKEN`. | After FE auth callback work is merged, run full `check_hosted_auth_smoke.py` with a short-lived token and redact output. |
-| FE detail/recommendation display | 다른 팀원 담당 | FE-BE connection implementation is explicitly out of this PR. | Resume product flow validation after that PR merges. |
+| Full hosted auth API smoke | 완료 | BE #225 ran the redacted full smoke with a short-lived token: `/v1/me`, `/v1/me/preferences`, `/v1/me/watchlist`, and `/v1/me/chat-sessions` all passed with `blockers=[]`; the temporary Cognito user was deleted. | Keep using redacted output only. Never paste bearer tokens, emails, watchlist bodies, chat titles, or raw responses. |
+| FE live evidence visibility | 완료 | FE #104 added the hosted smoke and the post-merge run for ticker `005930` returned `ok=true` with `/` and `/stocks/005930` both HTTP 200. | Re-run after FE detail/recommendation UI, API base, or Amplify deploy changes. |
 
 ## Redacted Smoke Evidence
 
@@ -103,7 +103,7 @@ STOCKBRIEF_API_BASE_URL="https://hazfha7995.execute-api.ap-northeast-2.amazonaws
 uv run python scripts/check_hosted_auth_smoke.py --skip-auth-api
 ```
 
-Evidence captured on 2026-06-29:
+Page-only evidence captured on 2026-06-29:
 
 - `/`: HTTP 200
 - `/account`: HTTP 200
@@ -117,9 +117,38 @@ export STOCKBRIEF_AUTH_BEARER_TOKEN="REPLACE_WITH_SHORT_LIVED_TOKEN"
 uv run python scripts/check_hosted_auth_smoke.py
 ```
 
-This checks `/v1/me`, `/v1/me/preferences`, `/v1/me/watchlist`, and
-`/v1/me/chat-sessions`. Only paste the redacted JSON result. Never paste the
-bearer token, email, watchlist item body, or raw protected API response body.
+BE #225 captured a full hosted auth API smoke on 2026-06-29 after the helper
+was updated to accept both wrapped and top-level protected API response shapes:
+
+- hosted pages `/`, `/account`, and `/auth/callback`: HTTP 200
+- `/v1/me`: authenticated summary passed
+- `/v1/me/preferences`: preference summary passed
+- `/v1/me/watchlist`: item count summary passed
+- `/v1/me/chat-sessions`: session count summary passed
+- `blockers=[]`
+- the temporary Cognito smoke user was deleted after the run
+
+Only paste the redacted JSON result. Never paste the bearer token, email,
+watchlist item body, chat title, or raw protected API response body.
+
+### FE hosted live evidence smoke
+
+Run this from the FE repository root after a hosted FE deploy, detail page
+change, recommendation card change, or API base URL change:
+
+```bash
+STOCKBRIEF_HOSTED_URL="https://main.d20hgo2k8atldu.amplifyapp.com" \
+pnpm run smoke:hosted-evidence -- --ticker 005930
+```
+
+Evidence captured after FE #104 merged on 2026-06-29:
+
+- `ok=true`
+- `/`: HTTP 200
+- `/stocks/005930`: HTTP 200
+- detail page summary included score, evidence section, evidence ID, published
+  date, and source reference
+- `blockers=[]`
 
 ### Ingestion smoke
 
@@ -165,16 +194,16 @@ aws sqs get-queue-attributes \
   --region ap-northeast-2
 
 AWS_PROFILE=stockbrief-dev \
-aws scheduler get-schedule \
-  --name stockbrief-dev-provider-ingestion-opendart \
+aws scheduler list-schedules \
+  --name-prefix stockbrief-dev-provider-ingestion \
   --region ap-northeast-2 \
-  --query '{Name:Name, State:State, ScheduleExpression:ScheduleExpression}'
+  --query 'Schedules[].{Name:Name, State:State}'
 
 AWS_PROFILE=stockbrief-dev \
-aws scheduler get-schedule \
-  --name stockbrief-dev-provider-ingestion-naver-news \
+aws ec2 describe-nat-gateways \
   --region ap-northeast-2 \
-  --query '{Name:Name, State:State, ScheduleExpression:ScheduleExpression}'
+  --filter Name=tag:Name,Values=stockbrief-dev-lambda-nat \
+  --query 'NatGateways[].{NatGatewayId:NatGatewayId,State:State}'
 ```
 
 Evidence captured on 2026-06-29:
@@ -182,8 +211,11 @@ Evidence captured on 2026-06-29:
 - DLQ visible messages: `0`
 - DLQ not-visible messages: `0`
 - DLQ delayed messages: `0`
-- OpenDART schedule: `ENABLED`, `cron(0 18 ? * MON-FRI *)`
-- NAVER_NEWS schedule: `ENABLED`, `cron(5 18 ? * MON-FRI *)`
+- provider ingestion schedules: `[]`
+- Terraform-managed NAT Gateways: `[]`
+- `infra/terraform/envs/dev/deploy.auto.tfvars.json` still keeps the reviewed
+  OpenDART and NAVER `005930` schedule definitions as reactivation inputs while
+  `enable_ingestion_scheduler=false`
 
 ## Terraform Drift Classification
 
@@ -246,9 +278,11 @@ Current cost-sensitive state after #214 is applied:
 
 - RDS is running and available.
 - NAT Gateway is removed by Terraform unless a live provider ingestion window is
-  active.
+  active. The 2026-06-29 read-only AWS check returned an empty NAT Gateway list
+  for `stockbrief-dev-lambda-nat`.
 - Scheduler jobs remain defined in tfvars but are not created while
-  `enable_ingestion_scheduler=false`.
+  `enable_ingestion_scheduler=false`. The 2026-06-29 read-only AWS check
+  returned an empty provider ingestion schedule list.
 - RDS Proxy is disabled.
 - AgentCore Runtime is disabled.
 
@@ -263,14 +297,19 @@ Decision rule:
 
 ## Completion Gate For Next Feature Work
 
-Move to product-flow feature development only after:
+Product-flow feature development may resume when a new feature has its own
+issue, branch, and review plan. The cloud completion gates below are closed for
+the current dev baseline:
 
-1. This audit PR is reviewed and merged.
-2. The teammate-owned FE-BE connection PR is merged.
-3. Full hosted auth API smoke passes with a short-lived token.
-4. Terraform plan drift is either resolved or explicitly accepted in a reviewed
-   infrastructure PR.
-5. NAT/scheduler cost posture is intentionally chosen for the next work window.
+1. The original audit PR was reviewed and merged.
+2. FE #104 merged the hosted live evidence visibility smoke.
+3. BE #225 merged the full hosted auth API smoke helper fix and passed the
+   short-lived-token smoke.
+4. Terraform plan drift is explicitly accepted in the reviewed #223
+   infrastructure documentation.
+5. NAT/scheduler cost posture is intentionally chosen for the current work
+   window: NAT and scheduler stay disabled unless live provider ingestion work
+   resumes in a reviewed PR.
 
 Candidate next product checks after those gates:
 
