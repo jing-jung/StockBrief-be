@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -29,6 +31,10 @@ PROHIBITED_MODEL_OUTPUT_TERMS = (
     "손절가",  # policy-scan: allow model-output-guard
     "수익 보장",  # policy-scan: allow model-output-guard
 )
+MIN_BEDROCK_MAX_TOKENS = 64
+MAX_BEDROCK_MAX_TOKENS = 1200
+MIN_BEDROCK_TIMEOUT_SECONDS = 1.0
+MAX_BEDROCK_TIMEOUT_SECONDS = 30.0
 EVIDENCE_ID_REFERENCE_PATTERN = re.compile(r"\[([A-Za-z0-9][A-Za-z0-9_.:-]{2,})\]")
 LIKELY_FALSE_POSITIVE_PATTERNS = (
     re.compile(r"(매수|매도)\s*(권유|추천|조언|의견)\s*(?:가|은|는)?\s*아닙니다"),
@@ -88,7 +94,7 @@ class BedrockChatProvider:
         timeout_seconds: float = 8.0,
         client: Any | None = None,
     ) -> None:
-        self.model_id = model_id
+        self.model_id = model_id.strip()
         self.region_name = region_name
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -110,10 +116,8 @@ class BedrockChatProvider:
         return self.client
 
     def compose(self, request: ChatProviderInput) -> ChatResponse:
-        if not self.model_id:
-            raise ChatProviderUnavailable(
-                "Bedrock chat provider requires BEDROCK_CHAT_MODEL_ID."
-            )
+        started_at = time.monotonic()
+        self._validate_configuration(started_at=started_at)
 
         baseline = compose_chat_answer(
             message=request.message,
@@ -121,9 +125,19 @@ class BedrockChatProvider:
             evidence=request.evidence,
         )
         if baseline.policy_status != "allowed":
+            _log_bedrock_provider_result(
+                started_at=started_at,
+                policy_status=baseline.policy_status,
+                citation_retry=False,
+            )
             return baseline
 
-        answer = self._request_answer(request=request, baseline=baseline)
+        citation_retry = False
+        answer = self._request_answer(
+            request=request,
+            baseline=baseline,
+            started_at=started_at,
+        )
         try:
             _validate_answer_citations(
                 answer=answer,
@@ -135,13 +149,17 @@ class BedrockChatProvider:
                 model_id=self.model_id,
                 region_name=self.region_name,
                 answer=answer,
+                started_at=started_at,
+                citation_guard_failure=True,
                 details=str(exc),
             )
             answer = self._request_answer(
                 request=request,
                 baseline=baseline,
                 citation_retry=True,
+                started_at=started_at,
             )
+            citation_retry = True
             try:
                 _validate_answer_citations(
                     answer=answer,
@@ -153,10 +171,17 @@ class BedrockChatProvider:
                     model_id=self.model_id,
                     region_name=self.region_name,
                     answer=answer,
+                    started_at=started_at,
+                    citation_guard_failure=True,
                     details=str(retry_exc),
                 )
                 raise retry_exc from exc
 
+        _log_bedrock_provider_result(
+            started_at=started_at,
+            policy_status=baseline.policy_status,
+            citation_retry=citation_retry,
+        )
         return ChatResponse(
             answer=answer,
             citations=baseline.citations,
@@ -164,11 +189,64 @@ class BedrockChatProvider:
             used_evidence_ids=baseline.used_evidence_ids,
         )
 
+    def _validate_configuration(self, *, started_at: float) -> None:
+        if not self.model_id:
+            _log_bedrock_configuration_failure(
+                reason="missing_model_id",
+                started_at=started_at,
+                model_id_configured=False,
+                region_configured=bool(self.region_name),
+            )
+            raise ChatProviderUnavailable(
+                "Bedrock chat provider requires BEDROCK_CHAT_MODEL_ID or an "
+                "inference profile id."
+            )
+        if not (
+            MIN_BEDROCK_MAX_TOKENS <= self.max_tokens <= MAX_BEDROCK_MAX_TOKENS
+        ):
+            _log_bedrock_configuration_failure(
+                reason="invalid_max_tokens",
+                started_at=started_at,
+                model_id_configured=True,
+                region_configured=bool(self.region_name),
+            )
+            raise ChatProviderUnavailable(
+                "Bedrock chat provider requires BEDROCK_CHAT_MAX_TOKENS between 64 and 1200."
+            )
+        if not (
+            math.isfinite(self.temperature) and 0.0 <= self.temperature <= 1.0
+        ):
+            _log_bedrock_configuration_failure(
+                reason="invalid_temperature",
+                started_at=started_at,
+                model_id_configured=True,
+                region_configured=bool(self.region_name),
+            )
+            raise ChatProviderUnavailable(
+                "Bedrock chat provider requires BEDROCK_CHAT_TEMPERATURE between 0.0 and 1.0."
+            )
+        if (
+            not math.isfinite(self.timeout_seconds)
+            or not MIN_BEDROCK_TIMEOUT_SECONDS
+            <= self.timeout_seconds
+            <= MAX_BEDROCK_TIMEOUT_SECONDS
+        ):
+            _log_bedrock_configuration_failure(
+                reason="invalid_timeout_seconds",
+                started_at=started_at,
+                model_id_configured=True,
+                region_configured=bool(self.region_name),
+            )
+            raise ChatProviderUnavailable(
+                "Bedrock chat provider requires BEDROCK_CHAT_TIMEOUT_SECONDS between 1 and 30."
+            )
+
     def _request_answer(
         self,
         *,
         request: ChatProviderInput,
         baseline: ChatResponse,
+        started_at: float,
         citation_retry: bool = False,
     ) -> str:
         try:
@@ -196,11 +274,12 @@ class BedrockChatProvider:
             )
         except (BotoCoreError, ClientError) as exc:
             logger.warning(
-                "bedrock_chat_provider_fail_closed reason=runtime_request_failed model_id=%s region_name=%s error_type=%s error_message=%s",
+                "bedrock_chat_provider_fail_closed provider=bedrock latency_ms=%s reason=runtime_request_failed fail_closed_reason=runtime_request_failed citation_guard_failure=False unsafe_output_block=False model_id=%s region_name=%s error_type=%s error_code=%s",
+                _elapsed_ms(started_at),
                 self.model_id,
                 self.region_name,
                 type(exc).__name__,
-                str(exc),
+                _bedrock_error_code(exc),
             )
             raise ChatProviderUnavailable(
                 "Bedrock chat provider request failed."
@@ -213,6 +292,7 @@ class BedrockChatProvider:
                 model_id=self.model_id,
                 region_name=self.region_name,
                 answer="",
+                started_at=started_at,
             )
             raise ChatProviderUnavailable("Bedrock chat provider returned an empty answer.")
         guard_result = _evaluate_prohibited_output(answer)
@@ -222,7 +302,9 @@ class BedrockChatProvider:
                 model_id=self.model_id,
                 region_name=self.region_name,
                 answer=answer,
+                started_at=started_at,
                 guard_result=guard_result,
+                unsafe_output_block=True,
             )
             raise ChatProviderUnavailable(
                 "Bedrock chat provider returned an unsafe answer."
@@ -333,7 +415,9 @@ def _reason_evidence_ids(
     evidence_ids: list[str],
     allowed_citation_ids: set[str],
 ) -> str:
-    filtered = [evidence_id for evidence_id in evidence_ids if evidence_id in allowed_citation_ids]
+    filtered = [
+        evidence_id for evidence_id in evidence_ids if evidence_id in allowed_citation_ids
+    ]
     return ", ".join(filtered) or "none"
 
 
@@ -375,13 +459,22 @@ def _log_bedrock_guard_failure(
     model_id: str,
     region_name: str | None,
     answer: str,
+    started_at: float,
     guard_result: OutputGuardResult | None = None,
+    citation_guard_failure: bool = False,
+    unsafe_output_block: bool = False,
     details: str = "",
 ) -> None:
-    fingerprint = hashlib.sha256(answer.encode("utf-8")).hexdigest()[:16] if answer else ""
+    fingerprint = (
+        hashlib.sha256(answer.encode("utf-8")).hexdigest()[:16] if answer else ""
+    )
     logger.warning(
-        "bedrock_chat_provider_fail_closed reason=%s model_id=%s region_name=%s answer_length=%s answer_sha256_prefix=%s matched_terms=%s likely_false_positive=%s details=%s",
+        "bedrock_chat_provider_fail_closed provider=bedrock latency_ms=%s reason=%s fail_closed_reason=%s citation_guard_failure=%s unsafe_output_block=%s model_id=%s region_name=%s answer_length=%s answer_sha256_prefix=%s matched_terms=%s likely_false_positive=%s details=%s",
+        _elapsed_ms(started_at),
         reason,
+        reason,
+        citation_guard_failure,
+        unsafe_output_block,
         model_id,
         region_name,
         len(answer),
@@ -390,6 +483,47 @@ def _log_bedrock_guard_failure(
         guard_result.likely_false_positive if guard_result else False,
         details,
     )
+
+
+def _log_bedrock_configuration_failure(
+    *,
+    reason: str,
+    started_at: float,
+    model_id_configured: bool,
+    region_configured: bool,
+) -> None:
+    logger.warning(
+        "bedrock_chat_provider_fail_closed provider=bedrock latency_ms=%s reason=%s fail_closed_reason=%s citation_guard_failure=False unsafe_output_block=False model_id_configured=%s region_configured=%s",
+        _elapsed_ms(started_at),
+        reason,
+        reason,
+        model_id_configured,
+        region_configured,
+    )
+
+
+def _log_bedrock_provider_result(
+    *,
+    started_at: float,
+    policy_status: str,
+    citation_retry: bool,
+) -> None:
+    logger.info(
+        "bedrock_chat_provider_result provider=bedrock latency_ms=%s policy_status=%s citation_retry=%s fail_closed_reason=none citation_guard_failure=False unsafe_output_block=False",
+        _elapsed_ms(started_at),
+        policy_status,
+        citation_retry,
+    )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((time.monotonic() - started_at) * 1000))
+
+
+def _bedrock_error_code(exc: BotoCoreError | ClientError) -> str:
+    if isinstance(exc, ClientError):
+        return str(exc.response.get("Error", {}).get("Code", ""))
+    return ""
 
 
 def _validate_answer_citations(

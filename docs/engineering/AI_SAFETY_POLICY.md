@@ -151,10 +151,14 @@ Provider configuration:
 - `CHAT_PROVIDER=mock` is the default local and dev-safe provider. It uses the
   deterministic composer and does not call external AI services.
 - `CHAT_PROVIDER=bedrock` enables the direct Bedrock Runtime provider. It must
-  use an approved `BEDROCK_CHAT_MODEL_ID`, preserve deterministic citations and
-  policy status from the local composer, and fail closed with
-  `CHAT_PROVIDER_UNAVAILABLE` if Bedrock is unavailable, returns an empty answer,
-  or emits prohibited financial wording.
+  use an approved `BEDROCK_CHAT_MODEL_ID` or inference profile id, preserve
+  deterministic citations and policy status from the local composer, and fail
+  closed with `CHAT_PROVIDER_UNAVAILABLE` if Bedrock is unavailable, returns
+  empty answers, or emits prohibited financial wording.
+- Bedrock configuration is validated before the runtime call. Blank model or
+  inference profile ids, out-of-bounds `BEDROCK_CHAT_MAX_TOKENS`,
+  `BEDROCK_CHAT_TEMPERATURE`, or `BEDROCK_CHAT_TIMEOUT_SECONDS` values fail
+  closed without logging secret values or provider response bodies.
 - Bedrock prompt context must include only the evidence IDs that the local
   composer selected as allowed citations. Evidence returned by the API but not
   selected for citation should stay out of the model prompt so the citation guard
@@ -163,10 +167,11 @@ Provider configuration:
   A Bedrock provider failure should be visible as an upstream provider error so
   operators can distinguish model/runtime issues from deterministic mock output.
 - Bedrock fail-closed logs must distinguish runtime request failures, empty
-  answers, unsafe output, and citation guard failures. Unsafe output logs must
-  not include the raw model answer; use answer length, a short SHA-256 prefix,
-  matched guard terms, and the `likely_false_positive` flag for operations
-  triage.
+  answers, unsafe output, and citation guard failures. Logs must include
+  `provider`, `latency_ms`, `fail_closed_reason`, `citation_guard_failure`, and
+  `unsafe_output_block`. Unsafe output logs must not include the raw model
+  answer; use answer length, a short SHA-256 prefix, matched guard terms, and the
+  `likely_false_positive` flag for operations triage.
 - Current dev status: after #202/#204, the deployed dev API runs the direct
   Bedrock provider with `apac.amazon.nova-micro-v1:0`. The post-merge
   validation path includes the redacted direct Bedrock smoke plus deployed
@@ -176,6 +181,9 @@ Provider configuration:
   direct Bedrock shows a concrete need for long-running runtime isolation and a
   separate review covers ECR image, runtime endpoint, IAM, and observability
   scope.
+- Strands Agents SDK remains out of the direct Bedrock provider. Strands tools
+  and adapters belong to the later AgentCore Runtime review, not this provider
+  hardening path.
 
 ## 8. Safety Validation Checklist
 

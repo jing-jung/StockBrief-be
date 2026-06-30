@@ -106,6 +106,46 @@ def test_chat_bedrock_provider_fails_closed_when_model_is_missing(
     assert "BEDROCK_CHAT_MODEL_ID" in payload["error"]["message"]
 
 
+def test_chat_bedrock_provider_rejects_invalid_max_tokens_before_runtime(
+    seeded_api_client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    def fail_if_bedrock_client_is_created(*args, **kwargs):
+        raise AssertionError("invalid Bedrock config must fail before runtime client")
+
+    def override_settings() -> Settings:
+        return Settings(
+            chat_provider="bedrock",
+            bedrock_chat_model_id="apac.amazon.nova-micro-v1:0",
+            bedrock_chat_region="ap-northeast-2",
+            bedrock_chat_max_tokens=1,
+        )
+
+    monkeypatch.setattr(
+        "app.services.chat.providers.boto3.client",
+        fail_if_bedrock_client_is_created,
+    )
+    app.dependency_overrides[get_settings] = override_settings
+    caplog.set_level(logging.WARNING, logger="app.services.chat.providers")
+    try:
+        response = seeded_api_client.post(
+            "/v1/chat",
+            json={"ticker": "005930", "message": "왜 추천됐나요?"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
+    assert "BEDROCK_CHAT_MAX_TOKENS" in payload["error"]["message"]
+    assert "provider=bedrock" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert "fail_closed_reason=invalid_max_tokens" in caplog.text
+    assert "unsafe_output_block=False" in caplog.text
+
+
 def test_chat_bedrock_provider_logs_runtime_request_failure_reason(
     seeded_api_client: TestClient,
     monkeypatch,
@@ -149,12 +189,20 @@ def test_chat_bedrock_provider_logs_runtime_request_failure_reason(
     assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
     assert "request failed" in payload["error"]["message"]
     assert "reason=runtime_request_failed" in caplog.text
+    assert "provider=bedrock" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert "fail_closed_reason=runtime_request_failed" in caplog.text
+    assert "citation_guard_failure=False" in caplog.text
+    assert "unsafe_output_block=False" in caplog.text
     assert "error_type=ClientError" in caplog.text
+    assert "error_code=AccessDeniedException" in caplog.text
+    assert "model access denied" not in caplog.text
 
 
 def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
     seeded_api_client: TestClient,
     monkeypatch,
+    caplog,
 ) -> None:
     class FakeBedrockClient:
         def __init__(self) -> None:
@@ -193,6 +241,7 @@ def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
 
     monkeypatch.setattr("app.services.chat.providers.boto3.client", fake_boto3_client)
     app.dependency_overrides[get_settings] = override_settings
+    caplog.set_level(logging.INFO, logger="app.services.chat.providers")
     try:
         response = seeded_api_client.post(
             "/v1/chat",
@@ -209,6 +258,9 @@ def test_chat_bedrock_provider_returns_model_answer_with_existing_citations(
     assert fake_client.calls
     assert fake_client.calls[0]["modelId"] == "apac.amazon.nova-micro-v1:0"
     assert fake_client.calls[0]["inferenceConfig"]["maxTokens"] == 700
+    assert "bedrock_chat_provider_result provider=bedrock" in caplog.text
+    assert "latency_ms=" in caplog.text
+    assert "citation_retry=False" in caplog.text
 
 
 def test_chat_bedrock_provider_retries_once_when_citations_are_missing(
@@ -327,6 +379,8 @@ def test_chat_bedrock_provider_fails_closed_when_retry_still_lacks_citations(
     assert "without evidence citations" in payload["error"]["message"]
     assert len(fake_client.calls) == 2
     assert "reason=citation_retry_failed" in caplog.text
+    assert "citation_guard_failure=True" in caplog.text
+    assert "fail_closed_reason=citation_retry_failed" in caplog.text
 
 
 def test_chat_bedrock_prompt_only_includes_guard_allowed_evidence() -> None:
@@ -719,6 +773,8 @@ def test_chat_bedrock_provider_logs_likely_false_positive_guard_without_raw_answ
     assert payload["error"]["code"] == "CHAT_PROVIDER_UNAVAILABLE"
     assert "unsafe answer" in payload["error"]["message"]
     assert "reason=unsafe_output" in caplog.text
+    assert "fail_closed_reason=unsafe_output" in caplog.text
+    assert "unsafe_output_block=True" in caplog.text
     assert "likely_false_positive=True" in caplog.text
     assert "matched_terms=매수" in caplog.text
     assert raw_model_answer not in caplog.text
