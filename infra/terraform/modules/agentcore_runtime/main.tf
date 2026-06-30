@@ -33,15 +33,50 @@ resource "aws_iam_role" "runtime" {
   assume_role_policy = data.aws_iam_policy_document.assume_agentcore.json
 }
 
+resource "aws_cloudwatch_log_group" "runtime" {
+  count = local.enabled ? 1 : 0
+
+  name              = "/aws/bedrock-agentcore/${local.runtime_name}"
+  retention_in_days = var.log_retention_days
+}
+
 data "aws_iam_policy_document" "runtime" {
   count = local.enabled ? 1 : 0
 
-  statement {
-    actions = [
-      "bedrock:InvokeModel",
-      "bedrock:InvokeModelWithResponseStream",
-    ]
-    resources = ["*"]
+  dynamic "statement" {
+    for_each = var.bedrock_chat_inference_profile_arn == "" ? [] : [var.bedrock_chat_inference_profile_arn]
+
+    content {
+      sid = "InvokeConfiguredInferenceProfile"
+      actions = [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+      ]
+      resources = [statement.value]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.bedrock_chat_foundation_model_arns) == 0 ? [] : [var.bedrock_chat_foundation_model_arns]
+
+    content {
+      sid = "InvokeConfiguredFoundationModels"
+      actions = [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+      ]
+      resources = statement.value
+
+      dynamic "condition" {
+        for_each = var.bedrock_chat_inference_profile_arn == "" ? [] : [var.bedrock_chat_inference_profile_arn]
+
+        content {
+          test     = "StringEquals"
+          variable = "bedrock:InferenceProfileArn"
+          values   = [condition.value]
+        }
+      }
+    }
   }
 
   statement {
@@ -60,7 +95,10 @@ data "aws_iam_policy_document" "runtime" {
       "logs:CreateLogStream",
       "logs:PutLogEvents",
     ]
-    resources = ["*"]
+    resources = [
+      aws_cloudwatch_log_group.runtime[0].arn,
+      "${aws_cloudwatch_log_group.runtime[0].arn}:*",
+    ]
   }
 }
 

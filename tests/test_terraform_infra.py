@@ -240,7 +240,7 @@ def test_direct_bedrock_chat_provider_is_conditionally_wired() -> None:
     terraform_readme = _read("README.md")
 
     assert 'variable "chat_provider"' in variables_tf
-    assert 'contains(["mock", "bedrock"], var.chat_provider)' in variables_tf
+    assert 'contains(["mock", "bedrock", "agentcore"], var.chat_provider)' in variables_tf
     assert 'variable "bedrock_chat_model_id"' in variables_tf
     assert 'variable "bedrock_chat_region"' in variables_tf
     assert 'chat_provider           = "mock"' in dev_tfvars

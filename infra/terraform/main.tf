@@ -224,9 +224,23 @@ module "agentcore_runtime" {
   network_mode       = var.agentcore_network_mode
   subnet_ids         = var.lambda_subnet_ids
   security_group_ids = var.lambda_security_group_ids
+  log_retention_days = var.agentcore_runtime_log_retention_days
+  bedrock_chat_foundation_model_arns = (
+    var.agentcore_runtime_enabled ? local.effective_bedrock_chat_foundation_model_arns : []
+  )
+  bedrock_chat_inference_profile_arn = (
+    var.agentcore_runtime_enabled ? local.effective_bedrock_chat_inference_profile_arn : ""
+  )
   environment_variables = {
-    APP_ENV      = var.environment
-    SERVICE_NAME = "stockbrief-agent"
+    APP_ENV                         = var.environment
+    SERVICE_NAME                    = "stockbrief-agent"
+    BEDROCK_CHAT_MODEL_ID           = var.bedrock_chat_model_id
+    BEDROCK_CHAT_REGION             = local.effective_bedrock_chat_region
+    BEDROCK_CHAT_MAX_TOKENS         = tostring(var.bedrock_chat_max_tokens)
+    BEDROCK_CHAT_TEMPERATURE        = tostring(var.bedrock_chat_temperature)
+    BEDROCK_CHAT_TIMEOUT_SECONDS    = tostring(var.bedrock_chat_timeout_seconds)
+    AGENTCORE_RUNTIME_MAX_TURNS     = tostring(var.agentcore_runtime_max_turns)
+    AGENTCORE_RUNTIME_USE_DEV_MODEL = "false"
   }
 }
 
@@ -261,20 +275,28 @@ module "api_lambda" {
   jwt_authorizer_issuer   = module.cognito.issuer
   jwt_authorizer_audience = [module.cognito.app_client_id]
   environment_variables = {
-    APP_ENV               = var.environment
-    LOG_LEVEL             = "info"
-    SERVICE_NAME          = "stockbrief-api"
-    SERVICE_VERSION       = "0.1.0"
-    API_BASE_PATH         = "/v1"
-    CORS_ALLOWED_ORIGINS  = var.cors_allowed_origins
-    CHAT_PROVIDER         = var.chat_provider
-    BEDROCK_CHAT_MODEL_ID = var.bedrock_chat_model_id
-    BEDROCK_CHAT_REGION   = local.effective_bedrock_chat_region
-    COGNITO_USER_POOL_ID  = module.cognito.user_pool_id
-    COGNITO_APP_CLIENT_ID = module.cognito.app_client_id
-    COGNITO_ISSUER        = module.cognito.issuer
-    COGNITO_JWKS_URL      = "${module.cognito.issuer}/.well-known/jwks.json"
-    INGESTION_RAW_BUCKET  = try(aws_s3_bucket.ingestion_raw[0].bucket, "")
+    APP_ENV                           = var.environment
+    LOG_LEVEL                         = "info"
+    SERVICE_NAME                      = "stockbrief-api"
+    SERVICE_VERSION                   = "0.1.0"
+    API_BASE_PATH                     = "/v1"
+    CORS_ALLOWED_ORIGINS              = var.cors_allowed_origins
+    CHAT_PROVIDER                     = var.chat_provider
+    BEDROCK_CHAT_MODEL_ID             = var.bedrock_chat_model_id
+    BEDROCK_CHAT_REGION               = local.effective_bedrock_chat_region
+    BEDROCK_CHAT_MAX_TOKENS           = tostring(var.bedrock_chat_max_tokens)
+    BEDROCK_CHAT_TEMPERATURE          = tostring(var.bedrock_chat_temperature)
+    BEDROCK_CHAT_TIMEOUT_SECONDS      = tostring(var.bedrock_chat_timeout_seconds)
+    AGENTCORE_RUNTIME_ARN             = module.agentcore_runtime.runtime_arn
+    AGENTCORE_RUNTIME_REGION          = var.aws_region
+    AGENTCORE_RUNTIME_QUALIFIER       = var.agentcore_runtime_qualifier
+    AGENTCORE_RUNTIME_TIMEOUT_SECONDS = tostring(var.agentcore_runtime_timeout_seconds)
+    AGENTCORE_RUNTIME_MAX_TURNS       = tostring(var.agentcore_runtime_max_turns)
+    COGNITO_USER_POOL_ID              = module.cognito.user_pool_id
+    COGNITO_APP_CLIENT_ID             = module.cognito.app_client_id
+    COGNITO_ISSUER                    = module.cognito.issuer
+    COGNITO_JWKS_URL                  = "${module.cognito.issuer}/.well-known/jwks.json"
+    INGESTION_RAW_BUCKET              = try(aws_s3_bucket.ingestion_raw[0].bucket, "")
   }
 }
 

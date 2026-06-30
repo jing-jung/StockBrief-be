@@ -325,6 +325,14 @@ def chat_provider_for(name: str, *, settings: Settings | None = None) -> ChatPro
             temperature=settings.bedrock_chat_temperature,
             timeout_seconds=settings.bedrock_chat_timeout_seconds,
         )
+    if name == "agentcore":
+        if settings is None:
+            raise ChatProviderUnavailable("Runtime chat provider requires settings.")
+        from app.services.chat.runtime_provider import (
+            runtime_chat_provider_from_settings,
+        )
+
+        return runtime_chat_provider_from_settings(settings)
     raise ChatProviderUnavailable(f"Unsupported chat provider: {name}")
 
 

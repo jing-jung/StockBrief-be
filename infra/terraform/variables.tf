@@ -52,13 +52,13 @@ variable "cors_allowed_origins" {
 }
 
 variable "chat_provider" {
-  description = "Chat explanation provider. Keep mock unless Bedrock invocation is explicitly approved."
+  description = "Chat explanation provider. Keep mock unless Bedrock or AgentCore invocation is explicitly approved."
   type        = string
   default     = "mock"
 
   validation {
-    condition     = contains(["mock", "bedrock"], var.chat_provider)
-    error_message = "chat_provider must be either mock or bedrock."
+    condition     = contains(["mock", "bedrock", "agentcore"], var.chat_provider)
+    error_message = "chat_provider must be mock, bedrock, or agentcore."
   }
 }
 
@@ -72,6 +72,24 @@ variable "bedrock_chat_region" {
   description = "Optional Bedrock Runtime region override. Leave empty to use aws_region."
   type        = string
   default     = ""
+}
+
+variable "bedrock_chat_max_tokens" {
+  description = "Maximum model output tokens for chat providers."
+  type        = number
+  default     = 700
+}
+
+variable "bedrock_chat_temperature" {
+  description = "Model temperature for chat providers."
+  type        = number
+  default     = 0.2
+}
+
+variable "bedrock_chat_timeout_seconds" {
+  description = "Bedrock Runtime timeout for chat providers."
+  type        = number
+  default     = 8
 }
 
 variable "bedrock_chat_inference_profile_foundation_model_regions" {
@@ -282,6 +300,30 @@ variable "agentcore_network_mode" {
     condition     = contains(["PUBLIC", "VPC"], var.agentcore_network_mode)
     error_message = "agentcore_network_mode must be PUBLIC or VPC."
   }
+}
+
+variable "agentcore_runtime_timeout_seconds" {
+  description = "Backend timeout for AgentCore Runtime invocation."
+  type        = number
+  default     = 8
+}
+
+variable "agentcore_runtime_max_turns" {
+  description = "Maximum Strands Agent turns per Runtime invocation."
+  type        = number
+  default     = 4
+}
+
+variable "agentcore_runtime_qualifier" {
+  description = "AgentCore Runtime qualifier used by the backend invoke path."
+  type        = string
+  default     = "DEFAULT"
+}
+
+variable "agentcore_runtime_log_retention_days" {
+  description = "CloudWatch log retention for the dev AgentCore Runtime PoC."
+  type        = number
+  default     = 14
 }
 
 variable "enable_ingestion_raw_archive" {

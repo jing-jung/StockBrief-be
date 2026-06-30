@@ -331,6 +331,9 @@ Response `data`:
 
 Chat providers explain stored scores, evidence, freshness, missing data, and
 risk tags. They must not generate, replace, or modify score values.
+`CHAT_PROVIDER=agentcore` is a dev-only provider that calls an AgentCore
+Runtime-compatible `/invocations` endpoint and then repeats the same API
+boundary safety and citation validation before returning `/v1/chat` data.
 
 Request:
 
@@ -364,6 +367,15 @@ Response `data`:
   }
 }
 ```
+
+AgentCore Runtime dev contract:
+
+- `GET /ping` returns `{"status":"Healthy"}`.
+- `POST /invocations` accepts JSON with `input.message`, `input.ticker`,
+  `input.candidate`, `input.evidence`, and `input.baseline`.
+- `POST /invocations` returns JSON with `status`, `response.answer`, and
+  redacted `response.trace` metadata for selected read-only tools, tool
+  latency/error status, metrics, policy status, and citation IDs.
 
 ## 10. Authenticated Account Endpoints
 

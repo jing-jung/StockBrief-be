@@ -40,12 +40,19 @@ class Settings(BaseSettings):
     cognito_app_client_id: str = Field(default="", validation_alias="COGNITO_APP_CLIENT_ID")
     cognito_issuer: str = Field(default="", validation_alias="COGNITO_ISSUER")
     cognito_jwks_url: str = Field(default="", validation_alias="COGNITO_JWKS_URL")
-    chat_provider: Literal["mock", "bedrock"] = Field(default="mock", validation_alias="CHAT_PROVIDER")
+    chat_provider: Literal["mock", "bedrock", "agentcore"] = Field(default="mock", validation_alias="CHAT_PROVIDER")
     bedrock_chat_model_id: str = Field(default="apac.amazon.nova-micro-v1:0", validation_alias="BEDROCK_CHAT_MODEL_ID")
     bedrock_chat_region: str = Field(default="", validation_alias="BEDROCK_CHAT_REGION")
     bedrock_chat_max_tokens: int = Field(default=700, validation_alias="BEDROCK_CHAT_MAX_TOKENS")
     bedrock_chat_temperature: float = Field(default=0.2, validation_alias="BEDROCK_CHAT_TEMPERATURE")
     bedrock_chat_timeout_seconds: float = Field(default=8.0, validation_alias="BEDROCK_CHAT_TIMEOUT_SECONDS")
+    agentcore_runtime_url: str = Field(default="", validation_alias="AGENTCORE_RUNTIME_URL")
+    agentcore_runtime_arn: str = Field(default="", validation_alias="AGENTCORE_RUNTIME_ARN")
+    agentcore_runtime_region: str = Field(default="", validation_alias="AGENTCORE_RUNTIME_REGION")
+    agentcore_runtime_qualifier: str = Field(default="DEFAULT", validation_alias="AGENTCORE_RUNTIME_QUALIFIER")
+    agentcore_runtime_timeout_seconds: float = Field(default=8.0, validation_alias="AGENTCORE_RUNTIME_TIMEOUT_SECONDS")
+    agentcore_runtime_max_turns: int = Field(default=4, validation_alias="AGENTCORE_RUNTIME_MAX_TURNS")
+    agentcore_runtime_use_dev_model: bool = Field(default=False, validation_alias="AGENTCORE_RUNTIME_USE_DEV_MODEL")
 
     model_config = SettingsConfigDict(
         env_file=".env",

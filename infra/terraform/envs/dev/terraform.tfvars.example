@@ -51,6 +51,10 @@ operational_alarm_email_addresses = []
 agentcore_runtime_enabled       = false
 agentcore_runtime_container_uri = ""
 agentcore_network_mode          = "PUBLIC"
+agentcore_runtime_timeout_seconds = 8
+agentcore_runtime_max_turns       = 4
+agentcore_runtime_qualifier       = "DEFAULT"
+agentcore_runtime_log_retention_days = 14
 
 enable_ingestion_raw_archive        = true
 ingestion_raw_retention_days        = 30

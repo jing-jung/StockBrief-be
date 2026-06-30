@@ -36,3 +36,18 @@ variable "request_header_allowlist" {
   type    = list(string)
   default = ["x-correlation-id", "x-user-id"]
 }
+
+variable "log_retention_days" {
+  type    = number
+  default = 14
+}
+
+variable "bedrock_chat_foundation_model_arns" {
+  type    = list(string)
+  default = []
+}
+
+variable "bedrock_chat_inference_profile_arn" {
+  type    = string
+  default = ""
+}

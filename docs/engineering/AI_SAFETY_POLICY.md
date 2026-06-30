@@ -177,13 +177,20 @@ Provider configuration:
   validation path includes the redacted direct Bedrock smoke plus deployed
   `/v1/chat` smoke, and it must still prove that response shape, policy status,
   disclaimer, and citation IDs stay within the existing contract.
-- AgentCore Runtime remains deferred. Do not move `/v1/chat` to AgentCore until
-  direct Bedrock shows a concrete need for long-running runtime isolation and a
-  separate review covers ECR image, runtime endpoint, IAM, and observability
-  scope.
-- Strands Agents SDK remains out of the direct Bedrock provider. Strands tools
-  and adapters belong to the later AgentCore Runtime review, not this provider
-  hardening path.
+- `CHAT_PROVIDER=agentcore` is a dev-only AgentCore Runtime path. It may be
+  selected only when a dev Runtime target is configured with
+  `AGENTCORE_RUNTIME_URL` or `AGENTCORE_RUNTIME_ARN`; missing targets, Runtime
+  request failures, empty answers, unsafe output, and citation guard failures
+  must fail closed with `CHAT_PROVIDER_UNAVAILABLE` and must not silently fall
+  back to mock or Bedrock output.
+- AgentCore output is not trusted by itself. The API provider boundary must keep
+  the local composer as the source of `policy_status`, citations, and allowed
+  evidence IDs, then re-check Runtime answers for prohibited output and citation
+  validity before returning `/v1/chat`.
+- Strands Agents SDK remains out of the direct Bedrock provider and the main app
+  dependency path. Strands code belongs only in the AgentCore Runtime
+  container/scaffold, may expose read-only tools, and must not mutate score,
+  ingestion, watchlist, or user preference state.
 
 ## 8. Safety Validation Checklist
 
