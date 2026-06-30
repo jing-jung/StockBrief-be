@@ -12,6 +12,7 @@ from app.services.ingestion import (
     check_ingestion_scheduler_enable_gate,
     get_ingestion_status,
     handle_ingestion_event,
+    handle_refresh_score_snapshots_event,
     reconcile_stale_ingestion_runs,
 )
 
@@ -34,6 +35,8 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         return check_ingestion_scheduler_enable_gate(event)
     if operation == "ingest_provider_batch":
         return handle_ingestion_event(event)
+    if operation == "refresh_score_snapshots":
+        return handle_refresh_score_snapshots_event(event)
     if operation == "get_ingestion_status":
         return get_ingestion_status(event)
     if operation == "reconcile_stale_ingestion_runs":
@@ -50,6 +53,7 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
             "check_provider_egress",
             "check_ingestion_scheduler_enable_gate",
             "ingest_provider_batch",
+            "refresh_score_snapshots",
             "get_ingestion_status",
             "reconcile_stale_ingestion_runs",
         ],

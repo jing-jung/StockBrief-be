@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -19,21 +19,33 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_session_factory
-from app.orm import Disclosure, EvidenceChunk, IngestionRun, NewsItem, SourceDocument, Stock
+from app.orm import (
+    Disclosure,
+    EvidenceChunk,
+    IngestionRun,
+    NewsItem,
+    PriceMetric,
+    RecommendationScore,
+    SourceDocument,
+    Stock,
+)
 from app.services.external.aws_secrets import load_secret_json
 from app.services.external.clients import (
+    KRX_PROVIDER,
     NAVER_PROVIDER,
     OPENDART_PROVIDER,
+    KrxClient,
     NaverNewsClient,
     OpenDartClient,
 )
 from app.services.external.transport import urllib_transport
 from app.services.external.types import ExternalApiResult, ExternalRequest, ExternalTransport
 from app.services.ingestion_idempotency import IngestionIdempotencyService
+from app.services.recommendation.materializer import materialize_recommendation_scores
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_PROVIDERS = (OPENDART_PROVIDER, NAVER_PROVIDER)
+SUPPORTED_PROVIDERS = (OPENDART_PROVIDER, NAVER_PROVIDER, KRX_PROVIDER)
 MAX_TICKERS_PER_BATCH = 20
 MAX_OPENDART_PAGE_COUNT = 100
 MAX_NAVER_NEWS_DISPLAY = 50
@@ -299,6 +311,11 @@ class ProviderIngestionService:
                 ticker=ticker,
                 page_count=request.page_count,
             )
+        if request.provider == KRX_PROVIDER:
+            return KrxClient(settings=self.settings, session=self.session).daily_trading(
+                ticker=ticker,
+                base_date=_compact_source_date(request.source_date),
+            )
         stock = self.session.get(Stock, ticker)
         company_name = stock.company_name if stock else ticker
         return NaverNewsClient(settings=self.settings, session=self.session).search_news(
@@ -319,6 +336,12 @@ class ProviderIngestionService:
             return {"inserted": 0, "updated": 0, "skipped": 1}
         if provider == OPENDART_PROVIDER:
             return self._persist_disclosures(
+                ticker=ticker,
+                result=result,
+                raw_archive_uri=raw_archive_uri,
+            )
+        if provider == KRX_PROVIDER:
+            return self._persist_krx_prices(
                 ticker=ticker,
                 result=result,
                 raw_archive_uri=raw_archive_uri,
@@ -403,6 +426,73 @@ class ProviderIngestionService:
                         source_url=source_url,
                         source_document_id=source_document.id,
                         raw_payload=payload,
+                    )
+                )
+                counts["inserted"] += 1
+        self.session.flush()
+        return counts
+
+    def _persist_krx_prices(
+        self,
+        *,
+        ticker: str,
+        result: ExternalApiResult,
+        raw_archive_uri: str | None,
+    ) -> dict[str, int]:
+        counts = {"inserted": 0, "updated": 0, "skipped": 0}
+        base_date = str(result.payload.get("base_date") or "").strip()
+        for item in _iter_dicts(result.payload.get("OutBlock_1")):
+            normalized = _normalize_krx_price_item(item, base_date=base_date)
+            if normalized is None or normalized["ticker"] != ticker:
+                counts["skipped"] += 1
+                continue
+            stock = self.session.get(Stock, ticker)
+            trade_date = normalized["trade_date"]
+            if stock is None or trade_date is None:
+                counts["skipped"] += 1
+                continue
+
+            raw_content = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            upsert_source_document(
+                self.session,
+                ticker=ticker,
+                source_type="price",
+                source_name=KRX_PROVIDER,
+                source_url=None,
+                external_id=f"KRX:price:{ticker}:{trade_date.isoformat()}",
+                title=f"{stock.company_name} KRX daily price {trade_date.isoformat()}",
+                published_at=datetime.combine(trade_date, datetime.min.time(), tzinfo=timezone.utc),
+                raw_content=raw_content,
+                metadata={
+                    "provider": KRX_PROVIDER,
+                    "raw_archive_uri": raw_archive_uri,
+                },
+            )
+            existing = self.session.scalars(
+                select(PriceMetric).where(
+                    PriceMetric.ticker == ticker,
+                    PriceMetric.trade_date == trade_date,
+                )
+            ).first()
+            if existing:
+                existing.close_price = normalized["close_price"]
+                existing.volume = normalized["volume"]
+                existing.trading_value = normalized["trading_value"]
+                existing.market_cap = normalized["market_cap"]
+                existing.change_rate = normalized["change_rate"]
+                existing.source = KRX_PROVIDER
+                counts["updated"] += 1
+            else:
+                self.session.add(
+                    PriceMetric(
+                        ticker=ticker,
+                        trade_date=trade_date,
+                        close_price=normalized["close_price"],
+                        volume=normalized["volume"],
+                        trading_value=normalized["trading_value"],
+                        market_cap=normalized["market_cap"],
+                        change_rate=normalized["change_rate"],
+                        source=KRX_PROVIDER,
                     )
                 )
                 counts["inserted"] += 1
@@ -494,6 +584,78 @@ def handle_ingestion_event(event: dict[str, object]) -> dict[str, Any]:
     if event.get("raise_on_failure") is True and result.get("ok") is False:
         raise RuntimeError(f"ingestion_batch_failed:{result.get('provider')}")
     return result
+
+
+def handle_refresh_score_snapshots_event(event: dict[str, object]) -> dict[str, Any]:
+    with get_session_factory()() as session:
+        result = refresh_score_snapshots(session, event)
+        session.commit()
+    if event.get("raise_on_failure") is True and result.get("ok") is False:
+        raise RuntimeError("refresh_score_snapshots_failed")
+    return result
+
+
+def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[str, Any]:
+    as_of_date = _event_as_of_date(event)
+    requested_tickers = _event_tickers(event)
+    ingestion_result: dict[str, Any] | None = None
+    provider_statuses: dict[str, dict[str, Any]] = {}
+
+    if event.get("provider"):
+        request = ProviderIngestionRequest.from_event(event)
+        ingestion_result = ProviderIngestionService(session).run_provider_batch(request)
+        provider_statuses = _provider_freshness_statuses(ingestion_result)
+        refresh_tickers = _successful_ingestion_tickers(ingestion_result)
+        target_tickers = _unique_tickers(request.tickers)
+    else:
+        refresh_tickers = _unique_tickers(requested_tickers)
+        target_tickers = refresh_tickers
+        provider_statuses = {
+            "refresh_operation": {
+                "status": "stale",
+                "reason": "no_provider_ingestion",
+                "as_of": as_of_date.isoformat(),
+            }
+        }
+
+    materializer_tickers = refresh_tickers or None
+    if ingestion_result is not None and not refresh_tickers:
+        refresh_result: dict[str, int | str] = {
+            "processed": 0,
+            "created": 0,
+            "updated": 0,
+            "reasons": 0,
+            "risk_signals": 0,
+        }
+    else:
+        refresh_result = materialize_recommendation_scores(
+            session,
+            as_of_date=as_of_date,
+            tickers=materializer_tickers,
+        )
+
+    annotated = _annotate_score_provider_freshness(
+        session,
+        as_of_date=as_of_date,
+        tickers=refresh_tickers or target_tickers,
+        score_version=_string_or_none(refresh_result.get("score_version")),
+        provider_statuses=provider_statuses,
+    )
+    provider_status = _aggregate_provider_status(provider_statuses)
+    return {
+        "ok": provider_status in {"success", "stale"} and int(refresh_result["processed"]) > 0,
+        "operation": "refresh_score_snapshots",
+        "as_of_date": as_of_date.isoformat(),
+        "ingestion": ingestion_result,
+        "successful_tickers": refresh_tickers,
+        "failed_tickers": _failed_ingestion_tickers(ingestion_result),
+        "provider_status": provider_status,
+        "provider_freshness": provider_statuses,
+        "refresh": {
+            **refresh_result,
+            "provider_freshness_annotated": annotated,
+        },
+    }
 
 
 def get_ingestion_status(event: dict[str, object] | None = None) -> dict[str, Any]:
@@ -734,6 +896,20 @@ def check_ingestion_readiness(settings: Settings | None = None) -> dict[str, Any
                 "field": "NAVER_CLIENT_SECRET",
             }
         )
+    if not hydrated_settings.krx_api_key:
+        issues.append(
+            {
+                "code": "missing_provider_credential",
+                "field": "KRX_API_KEY",
+            }
+        )
+    if not hydrated_settings.krx_daily_url:
+        issues.append(
+            {
+                "code": "missing_provider_endpoint",
+                "field": "KRX_DAILY_URL",
+            }
+        )
 
     return {
         "ok": not issues,
@@ -753,6 +929,10 @@ def check_ingestion_readiness(settings: Settings | None = None) -> dict[str, Any
                 NAVER_PROVIDER: {
                     "client_id_configured": bool(hydrated_settings.naver_client_id),
                     "client_secret_configured": bool(hydrated_settings.naver_client_secret),
+                },
+                KRX_PROVIDER: {
+                    "api_key_configured": bool(hydrated_settings.krx_api_key),
+                    "daily_url_configured": bool(hydrated_settings.krx_daily_url),
                 },
             },
             "network": {
@@ -826,14 +1006,32 @@ def check_provider_egress(
     event: dict[str, object] | None = None,
     *,
     transport: ExternalTransport | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     selected_providers, provider_issues = _provider_egress_selection(event or {})
     checks: dict[str, dict[str, Any]] = {}
     issues = list(provider_issues)
     transport_fn = transport or urllib_transport
+    base_settings = settings or get_settings()
 
     for provider in selected_providers:
-        endpoint = PROVIDER_EGRESS_ENDPOINTS[provider]
+        endpoint = _provider_egress_endpoint(provider, base_settings)
+        if not endpoint:
+            checks[provider] = {
+                "reachable": False,
+                "endpoint": None,
+                "status_code": None,
+                "error_code": "missing_provider_endpoint",
+                "note": "Provider endpoint is not configured.",
+            }
+            issues.append(
+                {
+                    "code": "missing_provider_endpoint",
+                    "provider": provider,
+                    "field": "KRX_DAILY_URL",
+                }
+            )
+            continue
         check = _check_provider_endpoint_egress(
             provider=provider,
             endpoint=endpoint,
@@ -883,6 +1081,12 @@ def _provider_egress_selection(event: dict[str, object]) -> tuple[list[str], lis
         if provider not in selected:
             selected.append(provider)
     return selected, issues
+
+
+def _provider_egress_endpoint(provider: str, settings: Settings) -> str:
+    if provider == KRX_PROVIDER:
+        return settings.krx_daily_url
+    return PROVIDER_EGRESS_ENDPOINTS[provider]
 
 
 def _scheduler_enable_gate_blockers(
@@ -993,7 +1197,13 @@ def _check_provider_endpoint_egress(
 
 
 def hydrate_external_api_settings(settings: Settings) -> Settings:
-    if settings.opendart_api_key and settings.naver_client_id and settings.naver_client_secret:
+    if (
+        settings.opendart_api_key
+        and settings.naver_client_id
+        and settings.naver_client_secret
+        and settings.krx_api_key
+        and settings.krx_daily_url
+    ):
         return settings
     if not settings.external_api_secret_arn:
         return settings
@@ -1011,6 +1221,18 @@ def hydrate_external_api_settings(settings: Settings) -> Settings:
             "naver_client_secret": (
                 settings.naver_client_secret
                 or _first_secret_value(secret, "NAVER_CLIENT_SECRET", "naver_client_secret")
+            ),
+            "krx_api_key": (
+                settings.krx_api_key
+                or _first_secret_value(secret, "KRX_API_KEY", "krx_api_key")
+            ),
+            "krx_daily_url": (
+                settings.krx_daily_url
+                or _first_secret_value(secret, "KRX_DAILY_URL", "krx_daily_url")
+            ),
+            "krx_api_key_header": (
+                settings.krx_api_key_header
+                or _first_secret_value(secret, "KRX_API_KEY_HEADER", "krx_api_key_header")
             ),
         }
     )
@@ -1160,6 +1382,167 @@ def upsert_evidence_chunk(
         return apply_values(existing_after_conflict)
 
 
+def _event_as_of_date(event: dict[str, object]) -> date:
+    raw = str(event.get("as_of_date") or event.get("source_date") or "").strip()
+    if raw:
+        if len(raw) == 8 and raw.isdigit():
+            parsed_compact = _parse_yyyymmdd(raw)
+            if parsed_compact is not None:
+                return parsed_compact.date()
+        parsed = _parse_iso_date(raw)
+        if parsed is not None:
+            return parsed
+    return datetime.now(timezone.utc).date()
+
+
+def _successful_ingestion_tickers(result: dict[str, Any] | None) -> list[str]:
+    if not isinstance(result, dict):
+        return []
+    return [
+        str(item["ticker"])
+        for item in result.get("results", [])
+        if isinstance(item, dict)
+        if item.get("status") in {"succeeded", "replayed"}
+        if item.get("ticker")
+    ]
+
+
+def _failed_ingestion_tickers(result: dict[str, Any] | None) -> list[str]:
+    if not isinstance(result, dict):
+        return []
+    return [
+        str(item["ticker"])
+        for item in result.get("results", [])
+        if isinstance(item, dict)
+        if item.get("status") in {"failed", "partial_failed"}
+        if item.get("ticker")
+    ]
+
+
+def _provider_freshness_statuses(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    provider = str(result.get("provider") or "unknown")
+    successful = _successful_ingestion_tickers(result)
+    failed = _failed_ingestion_tickers(result)
+    status = "success"
+    if failed and successful:
+        status = "partial_failed"
+    elif failed:
+        status = "failed"
+    elif result.get("ok") is False:
+        status = "failed"
+    return {
+        provider: {
+            "status": status,
+            "source_date": result.get("source_date"),
+            "successful_tickers": successful,
+            "failed_tickers": failed,
+        }
+    }
+
+
+def _aggregate_provider_status(provider_statuses: dict[str, dict[str, Any]]) -> str:
+    statuses = {str(item.get("status")) for item in provider_statuses.values()}
+    if "failed" in statuses:
+        return "failed"
+    if "partial_failed" in statuses:
+        return "partial_failed"
+    if "stale" in statuses:
+        return "stale"
+    return "success"
+
+
+def _annotate_score_provider_freshness(
+    session: Session,
+    *,
+    as_of_date: date,
+    tickers: list[str],
+    score_version: str | None,
+    provider_statuses: dict[str, dict[str, Any]],
+) -> int:
+    if not tickers or not provider_statuses:
+        return 0
+    statement = select(RecommendationScore).where(
+        RecommendationScore.as_of_date == as_of_date,
+        RecommendationScore.ticker.in_(_unique_tickers(tickers)),
+    )
+    if score_version:
+        statement = statement.where(RecommendationScore.score_version == score_version)
+    scores = session.scalars(statement).all()
+    for score in scores:
+        freshness = dict(score.data_freshness or {})
+        providers = dict(freshness.get("providers") or {})
+        providers.update(provider_statuses)
+        freshness["providers"] = providers
+        score.data_freshness = freshness
+    session.flush()
+    return len(scores)
+
+
+def _normalize_krx_price_item(
+    item: dict[str, Any],
+    *,
+    base_date: str,
+) -> dict[str, Any] | None:
+    ticker = _ticker_from_provider(item, "ISU_SRT_CD", "isuSrtCd", "ticker")
+    raw_date = _first_text(item, "BAS_DD", "basDd", "base_date") or base_date
+    trade_date = _parse_yyyymmdd(_compact_source_date(raw_date))
+    if not ticker or trade_date is None:
+        return None
+    return {
+        "ticker": ticker,
+        "trade_date": trade_date.date(),
+        "close_price": _decimal_from_provider(item, "TDD_CLSPRC", "close_price", "close"),
+        "volume": _decimal_from_provider(item, "ACC_TRDVOL", "volume"),
+        "trading_value": _decimal_from_provider(item, "ACC_TRDVAL", "trading_value"),
+        "market_cap": _decimal_from_provider(item, "MKTCAP", "market_cap"),
+        "change_rate": _decimal_from_provider(item, "FLUC_RT", "change_rate"),
+    }
+
+
+def _ticker_from_provider(item: dict[str, Any], *keys: str) -> str:
+    raw = _first_text(item, *keys)
+    if raw.startswith("A") and raw[1:].isdigit() and len(raw) <= 7:
+        return raw[1:].zfill(6)
+    if raw.isdigit() and len(raw) <= 6:
+        return raw.zfill(6)
+    return raw
+
+
+def _first_text(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _decimal_from_provider(item: dict[str, Any], *keys: str) -> Decimal | None:
+    raw = _first_text(item, *keys).replace(",", "")
+    if raw in {"", "-", "+"}:
+        return None
+    try:
+        return Decimal(raw)
+    except Exception:
+        return None
+
+
+def _compact_source_date(value: object) -> str:
+    raw = str(value or "").strip()
+    if len(raw) == 8 and raw.isdigit():
+        return raw
+    parsed = _parse_iso_date(raw)
+    if parsed is not None:
+        return parsed.strftime("%Y%m%d")
+    return raw.replace("-", "")
+
+
+def _parse_iso_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
 def _archiver_from_settings(settings: Settings) -> PayloadArchiver:
     if settings.ingestion_raw_bucket:
         return S3PayloadArchiver(bucket=settings.ingestion_raw_bucket)
@@ -1172,12 +1555,16 @@ def _normalize_provider(provider: str) -> str:
         return OPENDART_PROVIDER
     if normalized in {"naver", "naver_news"}:
         return NAVER_PROVIDER
+    if normalized in {"krx", "krx_price", "krx_prices"}:
+        return KRX_PROVIDER
     return provider
 
 
 def _job_type(provider: str) -> str:
     if provider == OPENDART_PROVIDER:
         return "disclosure"
+    if provider == KRX_PROVIDER:
+        return "price"
     return "news"
 
 

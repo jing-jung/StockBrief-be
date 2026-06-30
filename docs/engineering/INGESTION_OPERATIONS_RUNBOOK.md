@@ -68,17 +68,19 @@ payloads into PR comments, shared logs, or issue comments.
   ```bash
   aws lambda invoke \
     --function-name stockbrief-dev-api \
-    --payload '{"stockbrief_operation":"check_provider_egress","providers":["OpenDART","NAVER_NEWS"]}' \
+    --payload '{"stockbrief_operation":"check_provider_egress","providers":["OpenDART","NAVER_NEWS","KRX"]}' \
     --cli-binary-format raw-in-base64-out \
     /tmp/stockbrief-provider-egress-response.json \
     --profile stockbrief-dev \
     --region ap-northeast-2
   ```
 
-  The operation does not send API keys or client secrets. HTTP responses such as
-  `401`, `403`, or provider validation errors still prove network reachability.
-  DNS, connection, and timeout failures mean provider egress is not ready. An
-  S3 Gateway endpoint only covers raw archive writes to S3.
+  The operation does not send API keys or client secrets. KRX requires
+  `KRX_DAILY_URL` to be configured before this check can probe its endpoint.
+  HTTP responses such as `401`, `403`, or provider validation errors still
+  prove network reachability. DNS, connection, and timeout failures mean
+  provider egress is not ready. An S3 Gateway endpoint only covers raw archive
+  writes to S3.
 - For repeated checks, use the redacted smoke helper instead of copying full
   Lambda responses into shared logs:
 
@@ -86,7 +88,7 @@ payloads into PR comments, shared logs, or issue comments.
   AWS_PROFILE=stockbrief-dev \
   uv run python scripts/check_ingestion_smoke.py \
     --function-name stockbrief-dev-api \
-    --providers OpenDART NAVER_NEWS \
+    --providers OpenDART NAVER_NEWS KRX \
     --tickers 005930
   ```
 
@@ -104,6 +106,48 @@ payloads into PR comments, shared logs, or issue comments.
     --profile stockbrief-dev \
     --region ap-northeast-2
   ```
+
+## Local Mocked Verification
+
+Run these commands from `StockBrief-be` before requesting AWS dev smoke:
+
+```bash
+rtk uv run pytest tests/test_ingestion_pipeline.py
+rtk uv run pytest tests/test_external_adapters.py
+rtk uv run pytest tests/test_recommendation_materializer.py
+```
+
+The mocked KRX path does not require live credentials. The local tests patch the
+KRX provider client, ingest one successful ticker and one fallback ticker, then
+verify that score refresh runs only for the eligible ticker and records
+`data_freshness.providers.KRX.status = partial_failed`.
+
+## Score Refresh Operation
+
+Use `refresh_score_snapshots` when a provider ingest should immediately refresh
+eligible score snapshots. The operation runs provider ingestion first when
+`provider` is present, sends only succeeded or replayed tickers to the
+materializer, and records provider freshness on refreshed snapshots.
+
+Local mocked shape:
+
+```json
+{
+  "stockbrief_operation": "refresh_score_snapshots",
+  "provider": "KRX",
+  "tickers": ["005930"],
+  "source_date": "YYYY-MM-DD"
+}
+```
+
+Expected result:
+
+- `successful_tickers[]` contains only `succeeded` or `replayed` ingestion rows.
+- `failed_tickers[]` contains `failed` or `partial_failed` rows.
+- `refresh.processed` equals the number of eligible tickers that the
+  materializer processed.
+- `provider_status` is `success`, `partial_failed`, `failed`, or `stale`.
+- Refreshed score rows include `data_freshness.providers`.
 
 ## Manual Provider Smoke
 
@@ -131,6 +175,22 @@ aws lambda invoke \
   --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"NAVER_NEWS","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
   --cli-binary-format raw-in-base64-out \
   /tmp/stockbrief-naver-ingest-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+KRX price refresh:
+
+Run this only after the developer confirms the KRX dev endpoint and credential
+are present in Secrets Manager and Lambda egress is approved for the smoke
+window.
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --payload '{"stockbrief_operation":"refresh_score_snapshots","provider":"KRX","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/stockbrief-krx-refresh-response.json \
   --profile stockbrief-dev \
   --region ap-northeast-2
 ```

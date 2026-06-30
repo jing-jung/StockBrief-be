@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.orm import ApiCacheEntry, ExternalApiCallLog
-from app.services.external import NaverNewsClient, OpenDartClient, aws_secrets
-from app.services.external.clients import BaseExternalApiClient
+from app.services.external import KrxClient, NaverNewsClient, OpenDartClient, aws_secrets
+from app.services.external.clients import BaseExternalApiClient, KRX_PROVIDER
 from app.services.external.logger import ExternalApiCallLogger
 from app.services.external.types import ExternalRequest, ExternalResponse, RateLimitPolicy
 
@@ -15,6 +15,7 @@ from app.services.external.types import ExternalRequest, ExternalResponse, RateL
 def test_external_clients_share_base_template_methods() -> None:
     assert issubclass(OpenDartClient, BaseExternalApiClient)
     assert issubclass(NaverNewsClient, BaseExternalApiClient)
+    assert issubclass(KrxClient, BaseExternalApiClient)
 
 
 def test_external_api_logger_redacts_secret_like_request_params(
@@ -298,6 +299,86 @@ def test_naver_news_success_normalizes_payload_and_does_not_log_secrets(
     assert logs
     assert "naver-secret" not in str([log.request_params for log in logs])
     assert "naver-id" not in str([log.request_params for log in logs])
+
+
+def test_krx_fallback_without_live_configuration_does_not_call_external_api(
+    seeded_session: Session,
+) -> None:
+    client = KrxClient(
+        settings=Settings(KRX_DAILY_URL="", KRX_API_KEY=""),
+        session=seeded_session,
+        transport=lambda _request: (_ for _ in ()).throw(
+            AssertionError("transport should not be called without KRX configuration")
+        ),
+    )
+
+    result = client.daily_trading(ticker="005930", base_date="20260609")
+
+    assert result.data_status == "fallback"
+    assert result.payload["fallback"] is True
+    assert result.payload["OutBlock_1"] == []
+    assert result.missing_data[0]["field"] == "KRX_DAILY_URL"
+
+    cache_entry = seeded_session.scalars(
+        select(ApiCacheEntry).where(ApiCacheEntry.provider == KRX_PROVIDER)
+    ).first()
+    assert cache_entry is not None
+    assert cache_entry.response_payload["data_status"] == "fallback"
+
+    log = seeded_session.scalars(
+        select(ExternalApiCallLog)
+        .where(ExternalApiCallLog.provider == KRX_PROVIDER)
+        .order_by(ExternalApiCallLog.called_at.desc())
+    ).first()
+    assert log is not None
+    assert log.method == "FALLBACK"
+    assert log.error_code == "missing_daily_url"
+
+
+def test_krx_success_uses_configured_endpoint_without_logging_secret(
+    seeded_session: Session,
+) -> None:
+    calls: list[ExternalRequest] = []
+
+    def transport(request: ExternalRequest) -> ExternalResponse:
+        calls.append(request)
+        return ExternalResponse(
+            status_code=200,
+            payload={
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": "20260609",
+                        "ISU_SRT_CD": "005930",
+                        "TDD_CLSPRC": "70,000",
+                    }
+                ]
+            },
+        )
+
+    client = KrxClient(
+        settings=Settings(
+            KRX_DAILY_URL="https://krx.example/daily",
+            KRX_API_KEY="krx-secret",
+            KRX_API_KEY_HEADER="X-KRX-KEY",
+        ),
+        session=seeded_session,
+        transport=transport,
+    )
+
+    result = client.daily_trading(ticker="005930", base_date="20260609")
+
+    assert result.data_status == "available"
+    assert result.payload["ticker"] == "005930"
+    assert result.payload["base_date"] == "20260609"
+    assert calls[0].url == "https://krx.example/daily"
+    assert calls[0].params == {"basDd": "20260609"}
+    assert calls[0].headers == {"X-KRX-KEY": "krx-secret"}
+
+    logs = seeded_session.scalars(
+        select(ExternalApiCallLog).where(ExternalApiCallLog.provider == KRX_PROVIDER)
+    ).all()
+    assert logs
+    assert "krx-secret" not in str([log.request_params for log in logs])
 
 
 def test_external_api_failure_returns_fallback_instead_of_raising(

@@ -10,10 +10,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.orm import Disclosure, EvidenceChunk, IngestionRun, NewsItem, SourceDocument
-from app.services.external.clients import NAVER_PROVIDER, OPENDART_PROVIDER
+from app.orm import (
+    Disclosure,
+    EvidenceChunk,
+    IngestionRun,
+    NewsItem,
+    PriceMetric,
+    RecommendationScore,
+    SourceDocument,
+)
+from app.services.external.clients import KRX_PROVIDER, NAVER_PROVIDER, OPENDART_PROVIDER
 from app.services.external.types import ExternalApiResult, ExternalRequest, ExternalResponse
 from app.services import ingestion as ingestion_module
+from app.services.recommendation.engine import SCORE_VERSION
 from app.services.ingestion import (
     check_ingestion_readiness,
     check_ingestion_scheduler_enable_gate,
@@ -24,6 +33,7 @@ from app.services.ingestion import (
     build_request_hash,
     build_run_id,
     check_raw_archive_write,
+    handle_refresh_score_snapshots_event,
     reconcile_stale_started_runs,
     summarize_ingestion_status,
     hydrate_external_api_settings,
@@ -776,6 +786,108 @@ def test_provider_fallback_marks_partial_failed_without_persisting_rows(
     assert result["results"][0]["error_summary"]["code"] == "provider_fallback"
 
 
+def test_refresh_score_snapshots_uses_successful_krx_tickers_and_marks_partial_freshness(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_daily_trading(self, *, ticker: str, base_date: str):
+        if ticker == "000660":
+            return ExternalApiResult(
+                provider=KRX_PROVIDER,
+                endpoint="/daily",
+                cache_key=f"krx:{ticker}:{base_date}",
+                data_status="fallback",
+                payload={"fallback": True, "ticker": ticker, "base_date": base_date, "OutBlock_1": []},
+                missing_data=[
+                    {
+                        "provider": KRX_PROVIDER,
+                        "field": "KRX_API_KEY",
+                        "reason": "missing_api_key",
+                        "data_status": "fallback",
+                    }
+                ],
+            )
+        return ExternalApiResult(
+            provider=KRX_PROVIDER,
+            endpoint="/daily",
+            cache_key=f"krx:{ticker}:{base_date}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "ticker": ticker,
+                "base_date": base_date,
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": base_date,
+                        "ISU_SRT_CD": ticker,
+                        "TDD_CLSPRC": "70,000",
+                        "ACC_TRDVOL": "1,234,567",
+                        "ACC_TRDVAL": "86,419,690,000",
+                        "MKTCAP": "417,000,000,000,000",
+                        "FLUC_RT": "1.25",
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.KrxClient.daily_trading",
+        fake_daily_trading,
+    )
+
+    class ExistingSessionFactory:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return seeded_session
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(
+        "app.services.ingestion.get_session_factory",
+        lambda: ExistingSessionFactory(),
+    )
+
+    result = handle_refresh_score_snapshots_event(
+        {
+            "stockbrief_operation": "refresh_score_snapshots",
+            "provider": KRX_PROVIDER,
+            "tickers": ["005930", "000660"],
+            "source_date": "2026-06-09",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["provider_status"] == "partial_failed"
+    assert result["successful_tickers"] == ["005930"]
+    assert result["failed_tickers"] == ["000660"]
+    assert result["refresh"]["processed"] == 1
+    assert result["refresh"]["provider_freshness_annotated"] == 1
+
+    price = seeded_session.scalars(
+        select(PriceMetric).where(
+            PriceMetric.ticker == "005930",
+            PriceMetric.trade_date == datetime(2026, 6, 9, tzinfo=timezone.utc).date(),
+        )
+    ).one()
+    assert price.source == KRX_PROVIDER
+    assert price.close_price == 70000
+
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(
+            RecommendationScore.ticker == "005930",
+            RecommendationScore.as_of_date == datetime(2026, 6, 9, tzinfo=timezone.utc).date(),
+            RecommendationScore.score_version == SCORE_VERSION,
+        )
+    ).one()
+    provider_freshness = score.data_freshness["providers"][KRX_PROVIDER]
+    assert provider_freshness["status"] == "partial_failed"
+    assert provider_freshness["successful_tickers"] == ["005930"]
+    assert provider_freshness["failed_tickers"] == ["000660"]
+
+
 def test_persist_failure_rolls_back_normalized_rows_before_marking_failed(
     monkeypatch,
     seeded_session: Session,
@@ -908,6 +1020,8 @@ def test_hydrate_external_api_settings_reads_external_secret(monkeypatch) -> Non
             "OPENDART_API_KEY": "opendart-secret",
             "NAVER_CLIENT_ID": "naver-id",
             "NAVER_CLIENT_SECRET": "naver-secret",
+            "KRX_API_KEY": "krx-secret",
+            "KRX_DAILY_URL": "https://krx.example/daily",
         },
     )
 
@@ -918,6 +1032,8 @@ def test_hydrate_external_api_settings_reads_external_secret(monkeypatch) -> Non
     assert settings.opendart_api_key == "opendart-secret"
     assert settings.naver_client_id == "naver-id"
     assert settings.naver_client_secret == "naver-secret"
+    assert settings.krx_api_key == "krx-secret"
+    assert settings.krx_daily_url == "https://krx.example/daily"
 
 
 def test_check_ingestion_readiness_reports_missing_configuration_without_secret_values() -> None:
@@ -936,6 +1052,10 @@ def test_check_ingestion_readiness_reports_missing_configuration_without_secret_
             "client_id_configured": False,
             "client_secret_configured": False,
         },
+        KRX_PROVIDER: {
+            "api_key_configured": False,
+            "daily_url_configured": False,
+        },
     }
     assert result["checks"]["network"]["outbound_internet_egress_verified"] is False
     assert result["issues"] == [
@@ -944,6 +1064,8 @@ def test_check_ingestion_readiness_reports_missing_configuration_without_secret_
         {"code": "missing_provider_credential", "field": "OPENDART_API_KEY"},
         {"code": "missing_provider_credential", "field": "NAVER_CLIENT_ID"},
         {"code": "missing_provider_credential", "field": "NAVER_CLIENT_SECRET"},
+        {"code": "missing_provider_credential", "field": "KRX_API_KEY"},
+        {"code": "missing_provider_endpoint", "field": "KRX_DAILY_URL"},
     ]
 
 
@@ -956,6 +1078,8 @@ def test_check_ingestion_readiness_loads_external_secret_without_exposing_values
             "OPENDART_API_KEY": "opendart-secret",
             "NAVER_CLIENT_ID": "naver-id",
             "NAVER_CLIENT_SECRET": "naver-secret",
+            "KRX_API_KEY": "krx-secret",
+            "KRX_DAILY_URL": "https://krx.example/daily",
         },
     )
 
@@ -978,6 +1102,7 @@ def test_check_ingestion_readiness_loads_external_secret_without_exposing_values
     assert "opendart-secret" not in serialized
     assert "naver-id" not in serialized
     assert "naver-secret" not in serialized
+    assert "krx-secret" not in serialized
 
 
 def test_check_ingestion_readiness_returns_secret_load_error(monkeypatch) -> None:
@@ -1069,13 +1194,17 @@ def test_check_provider_egress_reports_reachable_provider_endpoints() -> None:
         calls.append(request)
         return ExternalResponse(status_code=401, payload={})
 
-    result = check_provider_egress(transport=fake_transport)
+    result = check_provider_egress(
+        transport=fake_transport,
+        settings=Settings(KRX_DAILY_URL="https://krx.example/daily"),
+    )
 
     assert result["ok"] is True
     assert result["issues"] == []
     assert result["checks"]["providers"][OPENDART_PROVIDER]["reachable"] is True
     assert result["checks"]["providers"][NAVER_PROVIDER]["reachable"] is True
-    assert [call.method for call in calls] == ["GET", "GET"]
+    assert result["checks"]["providers"][KRX_PROVIDER]["reachable"] is True
+    assert [call.method for call in calls] == ["GET", "GET", "GET"]
     assert all(call.headers == {} for call in calls)
     assert all(call.timeout_seconds == 3.0 for call in calls)
 
@@ -1087,12 +1216,16 @@ def test_check_provider_egress_empty_provider_list_defaults_to_supported_provide
         calls.append(request)
         return ExternalResponse(status_code=401, payload={})
 
-    result = check_provider_egress({"providers": []}, transport=fake_transport)
+    result = check_provider_egress(
+        {"providers": []},
+        transport=fake_transport,
+        settings=Settings(KRX_DAILY_URL="https://krx.example/daily"),
+    )
 
     assert result["ok"] is True
     assert result["issues"] == []
-    assert set(result["checks"]["providers"]) == {OPENDART_PROVIDER, NAVER_PROVIDER}
-    assert len(calls) == 2
+    assert set(result["checks"]["providers"]) == {OPENDART_PROVIDER, NAVER_PROVIDER, KRX_PROVIDER}
+    assert len(calls) == 3
 
 
 def test_check_provider_egress_treats_http_error_as_reachable() -> None:
@@ -1282,6 +1415,11 @@ def test_check_ingestion_scheduler_enable_gate_passes_when_all_checks_pass(monke
                     "ticker": "005930",
                     "status": "succeeded",
                 },
+                {
+                    "provider": KRX_PROVIDER,
+                    "ticker": "005930",
+                    "status": "succeeded",
+                },
             ],
         },
     )
@@ -1294,6 +1432,6 @@ def test_check_ingestion_scheduler_enable_gate_passes_when_all_checks_pass(monke
 
     assert result["ok"] is True
     assert result["scheduler_enable_ready"] is True
-    assert result["providers"] == [OPENDART_PROVIDER, NAVER_PROVIDER]
+    assert result["providers"] == [OPENDART_PROVIDER, NAVER_PROVIDER, KRX_PROVIDER]
     assert result["tickers"] == ["005930"]
     assert result["blockers"] == []

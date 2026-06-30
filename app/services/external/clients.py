@@ -23,6 +23,7 @@ from app.services.external.types import (
 
 OPENDART_PROVIDER = "OpenDART"
 NAVER_PROVIDER = "NAVER_NEWS"
+KRX_PROVIDER = "KRX"
 
 
 class BaseExternalApiClient:
@@ -404,6 +405,92 @@ class NaverNewsClient(BaseExternalApiClient):
             endpoint=endpoint,
             cache_key=cache_key,
             request_params={"ticker": ticker, "company_name": company_name, "reason": reason},
+            error_code=reason,
+            payload=payload,
+            missing_data=missing_data,
+        )
+
+
+class KrxClient(BaseExternalApiClient):
+    def daily_trading(
+        self,
+        *,
+        ticker: str,
+        base_date: str,
+    ) -> ExternalApiResult:
+        endpoint = self.settings.krx_daily_url
+        cache_key = f"daily_trading:{ticker}:{base_date}"
+        cached = self._from_cache(
+            provider=KRX_PROVIDER,
+            endpoint=endpoint or "missing_krx_daily_url",
+            cache_key=cache_key,
+        )
+        if cached is not None:
+            return cached
+
+        if not endpoint:
+            return self._fallback(
+                endpoint="missing_krx_daily_url",
+                cache_key=cache_key,
+                ticker=ticker,
+                base_date=base_date,
+                reason="missing_daily_url",
+                field="KRX_DAILY_URL",
+            )
+        if not self.settings.krx_api_key:
+            return self._fallback(
+                endpoint=endpoint,
+                cache_key=cache_key,
+                ticker=ticker,
+                base_date=base_date,
+                reason="missing_api_key",
+                field="KRX_API_KEY",
+            )
+
+        return self._request_result(
+            provider=KRX_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            request=ExternalRequest(
+                method="GET",
+                url=endpoint,
+                params={"basDd": base_date},
+                headers={self.settings.krx_api_key_header: self.settings.krx_api_key},
+                timeout_seconds=self.rate_limit_policy.timeout_seconds,
+            ),
+            request_params={"basDd": base_date, "ticker": ticker},
+            fallback_payload={"ticker": ticker, "base_date": base_date, "OutBlock_1": []},
+            fallback_field="KRX daily trading response",
+            normalize_payload=lambda payload: {
+                **payload,
+                "ticker": ticker,
+                "base_date": base_date,
+            },
+        )
+
+    def _fallback(
+        self,
+        *,
+        endpoint: str,
+        cache_key: str,
+        ticker: str,
+        base_date: str,
+        reason: str,
+        field: str,
+    ) -> ExternalApiResult:
+        missing_data = [_missing_data(provider=KRX_PROVIDER, field=field, reason=reason)]
+        payload = {
+            "fallback": True,
+            "ticker": ticker,
+            "base_date": base_date,
+            "OutBlock_1": [],
+            "missing_data": missing_data,
+        }
+        return self._fallback_result(
+            provider=KRX_PROVIDER,
+            endpoint=endpoint,
+            cache_key=cache_key,
+            request_params={"ticker": ticker, "basDd": base_date, "reason": reason},
             error_code=reason,
             payload=payload,
             missing_data=missing_data,
