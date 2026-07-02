@@ -492,6 +492,16 @@ permissions with `Resource: "*"`, so keep them in the fallback statement unless
 AWS exposes resource-level support that still works with API Gateway HTTP API
 access logs.
 
+Terraform-managed NAT egress can also require EC2 APIs whose target ARN is not
+known before creation. When `lambda_nat_create_public_subnet=true`, Terraform
+creates the NAT public subnet and must be allowed to call `ec2:CreateSubnet` and
+`ec2:DeleteSubnet` during apply/rollback. When
+`lambda_nat_create_internet_gateway=true`, it also needs the Internet Gateway
+lifecycle actions `ec2:CreateInternetGateway`, `ec2:AttachInternetGateway`,
+`ec2:DetachInternetGateway`, and `ec2:DeleteInternetGateway`. Keep these EC2
+networking actions in the wildcard fallback until the Terraform-managed NAT
+path is replaced by pre-existing reviewed subnet and IGW IDs.
+
 PR #164 covers only the apply blocker found after the new dev account
 transition. It does not close #52 by itself. The `logs:TagResource` addition
 stays in the wildcard fallback for the current unblock and must remain tracked
@@ -524,6 +534,10 @@ Then verify the updated role with a real `backend-dev-deploy` workflow run. If
 the workflow fails with `AccessDenied`, inspect the denied action and resource
 before widening the wildcard fallback. Prefer adding a narrow
 `stockbrief-<environment>-*` ARN statement when the AWS service supports it.
+For `AWS::BedrockAgentCore::Runtime` AccessDenied failures, do not treat EC2 NAT
+permission changes as sufficient evidence. Confirm the target account and region
+can create AgentCore Runtime resources, then handle any required AgentCore
+control-plane permission separately from the NAT networking unblock.
 For policy edits, also validate the generated IAM policy with AWS Access
 Analyzer and resolve `ERROR` findings before applying it to the deploy role.
 After PR #164 merges, record on #52 that the bootstrap rerun updated the live

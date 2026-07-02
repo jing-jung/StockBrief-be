@@ -991,8 +991,14 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
         "kms:GetKeyPolicy",
         "kms:GetKeyRotationStatus",
         "apigateway:*",
+        "ec2:AttachInternetGateway",
+        "ec2:CreateInternetGateway",
         "ec2:CreateNatGateway",
         "ec2:DescribeNatGateways",
+        "ec2:CreateSubnet",
+        "ec2:DeleteInternetGateway",
+        "ec2:DeleteSubnet",
+        "ec2:DetachInternetGateway",
         "ec2:AllocateAddress",
         "ec2:DescribeAddressesAttribute",
         "ec2:CreateRouteTable",
@@ -1028,6 +1034,11 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
     assert "`apigateway:UntagResource`" in deployment_doc
     assert "`apigateway:*`" in deployment_doc
     assert "HTTP API access logging" in deployment_doc
+    assert "lambda_nat_create_public_subnet=true" in deployment_doc
+    assert "`ec2:CreateSubnet`" in deployment_doc
+    assert "`ec2:DeleteSubnet`" in deployment_doc
+    assert "`ec2:AttachInternetGateway`" in deployment_doc
+    assert "`AWS::BedrockAgentCore::Runtime` AccessDenied" in deployment_doc
     assert "`logs:CreateLogDelivery`" in deployment_doc
     assert "`logs:PutResourcePolicy`" in deployment_doc
     assert "`logs:UpdateLogDelivery`" in deployment_doc
