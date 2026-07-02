@@ -386,6 +386,18 @@ Current dev resume baseline:
   `apac.amazon.nova-micro-v1:0`. After a resume that touches Lambda, IAM, or
   Bedrock settings, run the redacted direct smoke and deployed `/v1/chat` smoke
   before treating AI explanation work as healthy.
+
+  ```bash
+  uv run python scripts/check_bedrock_chat_smoke.py \
+    --region ap-northeast-2 \
+    --model-id apac.amazon.nova-micro-v1:0
+
+  STOCKBRIEF_API_BASE_URL="https://hazfha7995.execute-api.ap-northeast-2.amazonaws.com" \
+  uv run python scripts/check_deployed_chat_smoke.py --ticker 005930
+  ```
+
+  Keep only the redacted JSON fields in PR evidence. Do not paste raw model
+  answers or provider response bodies.
 - After #214, the active dev profile keeps the reviewed OpenDART and NAVER job
   definitions for ticker `005930`, but NAT egress and EventBridge Scheduler are
   paused by default. Re-enable both only when the day's work includes live

@@ -24,6 +24,8 @@ def test_bedrock_policy_documents_fail_closed_controls() -> None:
         "`fail_closed_reason`",
         "`citation_guard_failure`",
         "`unsafe_output_block`",
+        "scripts/check_deployed_chat_smoke.py",
+        "without printing raw model answers",
     ]:
         assert phrase in policy
 

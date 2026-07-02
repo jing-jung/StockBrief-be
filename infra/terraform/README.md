@@ -732,12 +732,20 @@ changing Terraform variables.
 
 After applying a profile that switches the deployed API to
 `chat_provider = "bedrock"`, record `/v1/chat` live smoke evidence on the PR or
-linked issue before closing the Bedrock enablement work. The post-deploy smoke
-must confirm:
+linked issue before closing the Bedrock enablement work:
+
+```bash
+STOCKBRIEF_API_BASE_URL="https://<api-id>.execute-api.ap-northeast-2.amazonaws.com" \
+uv run python scripts/check_deployed_chat_smoke.py --ticker 005930
+```
+
+The deployed chat smoke prints redacted scenario results with policy action,
+answer length, `answer_sha256_prefix`, citation count, citation IDs, disclaimer
+presence, and matched guard terms. It does not print the raw answer or provider
+body. The post-deploy smoke must confirm:
 
 - the existing `/v1/chat` response contract is preserved, including `data.answer`,
-  `data.citations`, `data.policy_status`, `data.disclaimer`, and
-  `data.used_evidence_ids`;
+  `data.citations`, `data.safety.policy_action`, and `data.safety.disclaimer`;
 - the citation guard remains active, so Bedrock answers cannot return unsupported
   or invented evidence IDs;
 - Bedrock runtime failures, empty answers, unsafe output, and citation guard

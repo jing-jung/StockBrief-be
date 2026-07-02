@@ -143,18 +143,28 @@ def test_bedrock_chat_smoke_runbook_documents_redacted_validation() -> None:
     terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
         encoding="utf-8"
     )
+    deployment_doc = (
+        REPOSITORY_ROOT / "docs/engineering/DEPLOYMENT_BOOTSTRAP.md"
+    ).read_text(encoding="utf-8")
     script = (REPOSITORY_ROOT / "scripts/check_bedrock_chat_smoke.py").read_text(
         encoding="utf-8"
     )
+    deployed_script = (
+        REPOSITORY_ROOT / "scripts/check_deployed_chat_smoke.py"
+    ).read_text(encoding="utf-8")
 
     assert "scripts/check_bedrock_chat_smoke.py" in terraform_readme
     assert "--model-id apac.amazon.nova-micro-v1:0" in terraform_readme
+    assert "scripts/check_deployed_chat_smoke.py" in terraform_readme
+    assert "scripts/check_deployed_chat_smoke.py" in deployment_doc
     assert "`answer_sha256_prefix`" in terraform_readme
     assert "does not print the raw model" in terraform_readme
     assert "deployed `/v1/chat` evidence" in terraform_readme
     assert "CHAT_PROVIDER_UNAVAILABLE" in terraform_readme
     assert "PROHIBITED_MODEL_OUTPUT_TERMS" in script
+    assert "PROHIBITED_MODEL_OUTPUT_TERMS" in deployed_script
     assert "answer_sha256_prefix" in script
+    assert "answer_sha256_prefix" in deployed_script
 
 
 def test_hosted_auth_smoke_runbook_documents_redacted_validation() -> None:
