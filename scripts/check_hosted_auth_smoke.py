@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
+from uuid import uuid4
 
 
 DEFAULT_HOSTED_PATHS = ("/", "/account", "/auth/callback")
@@ -21,8 +22,13 @@ DEFAULT_AUTH_API_PATHS = (
     "/v1/me/chat-sessions",
 )
 DEFAULT_TOKEN_ENV = "STOCKBRIEF_AUTH_BEARER_TOKEN"
+DEFAULT_WATCHLIST_SMOKE_TICKER = "005930"
 
 Fetch = Callable[[str, dict[str, str], float], "HttpResponse"]
+JsonRequest = Callable[
+    [str, str, dict[str, str], dict[str, Any] | None, float],
+    "HttpResponse",
+]
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         token_file=args.token_file,
         check_pages=not args.skip_pages,
         check_auth_api=not args.skip_auth_api,
+        check_watchlist_write=args.check_watchlist_write,
+        watchlist_ticker=args.watchlist_ticker,
         timeout_seconds=args.timeout_seconds,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -93,6 +101,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--skip-pages", action="store_true")
     parser.add_argument("--skip-auth-api", action="store_true")
+    parser.add_argument(
+        "--check-watchlist-write",
+        action="store_true",
+        help="Also run a safe add/update/delete cycle for /v1/me/watchlist.",
+    )
+    parser.add_argument(
+        "--watchlist-ticker",
+        default=os.environ.get(
+            "STOCKBRIEF_WATCHLIST_SMOKE_TICKER",
+            DEFAULT_WATCHLIST_SMOKE_TICKER,
+        ),
+        help="Ticker to use for the optional watchlist write cycle. Defaults to 005930.",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,19 +125,25 @@ def run_smoke(
     token_file: str = "",
     check_pages: bool = True,
     check_auth_api: bool = True,
+    check_watchlist_write: bool = False,
+    watchlist_ticker: str = DEFAULT_WATCHLIST_SMOKE_TICKER,
     timeout_seconds: float = 10.0,
     fetch: Fetch | None = None,
+    request_json: JsonRequest | None = None,
 ) -> dict[str, Any]:
     blockers: list[dict[str, str]] = []
     checks: dict[str, dict[str, Any]] = {}
     normalized_hosted_url = normalize_base_url(hosted_url)
     normalized_api_base_url = normalize_api_base_url(api_base_url)
     fetcher = fetch or fetch_url
+    json_requester = request_json or request_json_url
 
     if check_pages and not normalized_hosted_url:
         blockers.append({"code": "missing_hosted_url"})
     if check_auth_api and not normalized_api_base_url:
         blockers.append({"code": "missing_api_base_url"})
+    if check_watchlist_write and not check_auth_api:
+        blockers.append({"code": "watchlist_write_requires_auth_api"})
 
     token, token_blockers = read_auth_token(
         token_env=token_env,
@@ -155,6 +182,16 @@ def run_smoke(
                 fetch=fetcher,
             )
             checks[result.name] = result.as_dict()
+
+    if check_watchlist_write:
+        result = check_watchlist_write_cycle(
+            base_url=normalized_api_base_url,
+            ticker=watchlist_ticker,
+            token=token,
+            timeout_seconds=timeout_seconds,
+            request_json=json_requester,
+        )
+        checks[result.name] = result.as_dict()
 
     return {
         "ok": bool(checks) and all(check["ok"] for check in checks.values()),
@@ -243,6 +280,203 @@ def fetch_url(url: str, headers: dict[str, str], timeout_seconds: float) -> Http
         )
 
 
+def request_json_url(
+    url: str,
+    method: str,
+    headers: dict[str, str],
+    body: dict[str, Any] | None,
+    timeout_seconds: float,
+) -> HttpResponse:
+    encoded_body = None
+    request_headers = dict(headers)
+    if body is not None:
+        encoded_body = json.dumps(body).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=encoded_body,
+        headers=request_headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return HttpResponse(
+                status_code=response.status,
+                body=response.read(),
+            )
+    except urllib.error.HTTPError as exc:
+        return HttpResponse(status_code=exc.code, body=exc.read())
+    except urllib.error.URLError as exc:
+        return HttpResponse(
+            status_code=None,
+            body=b"",
+            error_code=type(exc.reason).__name__ if exc.reason else type(exc).__name__,
+            error_message=str(exc.reason),
+        )
+    except TimeoutError as exc:
+        return HttpResponse(
+            status_code=None,
+            body=b"",
+            error_code="TimeoutError",
+            error_message=str(exc),
+        )
+
+
+def check_watchlist_write_cycle(
+    *,
+    base_url: str,
+    ticker: str,
+    token: str,
+    timeout_seconds: float,
+    request_json: JsonRequest,
+) -> CheckResult:
+    headers = {"Authorization": f"Bearer {token}"}
+    summary = {
+        "response_shape": "watchlist_write_cycle",
+        "contract_ok": False,
+        "preexisting_item": False,
+        "created": False,
+        "updated": False,
+        "deleted": False,
+        "cleanup_confirmed": False,
+    }
+
+    initial = request_json(
+        api_url(base_url, "/v1/me/watchlist"),
+        "GET",
+        headers,
+        None,
+        timeout_seconds,
+    )
+    initial_body = parse_json_body(initial.body)
+    if initial.error_code is not None or initial.status_code != 200:
+        return CheckResult(
+            ok=False,
+            name="auth_api:/v1/me/watchlist:write_cycle",
+            target="/v1/me/watchlist/{ticker}",
+            status_code=initial.status_code,
+            summary=summary,
+            error_code=(
+                initial.error_code
+                or extract_error_code(initial_body)
+                or "watchlist_read_failed"
+            ),
+            error_message=initial.error_message,
+        )
+
+    if watchlist_contains_ticker(initial_body, ticker):
+        summary["preexisting_item"] = True
+        return CheckResult(
+            ok=False,
+            name="auth_api:/v1/me/watchlist:write_cycle",
+            target="/v1/me/watchlist/{ticker}",
+            status_code=initial.status_code,
+            summary=summary,
+            error_code="preexisting_watchlist_item",
+        )
+
+    smoke_marker = uuid4().hex[:12]
+    add_body = {
+        "ticker": ticker,
+        "name": "StockBrief smoke item",
+        "market": "KOSPI",
+        "sector": "smoke",
+        "memo": f"created by hosted auth smoke {smoke_marker}",
+    }
+    created = request_json(
+        api_url(base_url, "/v1/me/watchlist"),
+        "POST",
+        headers,
+        add_body,
+        timeout_seconds,
+    )
+    created_body = parse_json_body(created.body)
+    summary["created"] = (
+        created.status_code == 200
+        and watchlist_item_matches(created_body, add_body)
+    )
+    if not summary["created"]:
+        created_payload = response_payload(created_body)
+        marker_mismatch = (
+            created.status_code == 200
+            and isinstance(created_payload, dict)
+            and created_payload.get("ticker") == ticker
+        )
+        return CheckResult(
+            ok=False,
+            name="auth_api:/v1/me/watchlist:write_cycle",
+            target="/v1/me/watchlist/{ticker}",
+            status_code=created.status_code,
+            summary=summary,
+            error_code=(
+                "concurrent_watchlist_item_detected"
+                if marker_mismatch
+                else extract_error_code(created_body) or "watchlist_create_failed"
+            ),
+            error_message=created.error_message,
+        )
+
+    updated = request_json(
+        api_url(base_url, f"/v1/me/watchlist/{ticker}"),
+        "PATCH",
+        headers,
+        {"memo": "updated by hosted auth smoke"},
+        timeout_seconds,
+    )
+    updated_body = parse_json_body(updated.body)
+    summary["updated"] = (
+        updated.status_code == 200
+        and response_payload(updated_body).get("ticker") == ticker
+    )
+
+    deleted = request_json(
+        api_url(base_url, f"/v1/me/watchlist/{ticker}"),
+        "DELETE",
+        headers,
+        None,
+        timeout_seconds,
+    )
+    summary["deleted"] = deleted.status_code == 204
+
+    final = request_json(
+        api_url(base_url, "/v1/me/watchlist"),
+        "GET",
+        headers,
+        None,
+        timeout_seconds,
+    )
+    final_body = parse_json_body(final.body)
+    summary["cleanup_confirmed"] = (
+        final.status_code == 200 and not watchlist_contains_ticker(final_body, ticker)
+    )
+    summary["contract_ok"] = all(
+        bool(summary[key]) for key in ("created", "updated", "deleted", "cleanup_confirmed")
+    )
+    ok = summary["contract_ok"] is True
+    status_code = (
+        first_failure_status(created, updated, deleted, final)
+        if not ok
+        else final.status_code
+    )
+    error_code = None
+    if not ok:
+        error_code = (
+            extract_error_code(created_body)
+            or extract_error_code(updated_body)
+            or extract_error_code(final_body)
+            or "watchlist_write_cycle_failed"
+        )
+
+    return CheckResult(
+        ok=ok,
+        name="auth_api:/v1/me/watchlist:write_cycle",
+        target="/v1/me/watchlist/{ticker}",
+        status_code=status_code,
+        summary=summary,
+        error_code=error_code,
+    )
+
+
 def normalize_base_url(value: str) -> str:
     stripped = value.strip().rstrip("/")
     if not stripped:
@@ -258,6 +492,10 @@ def normalize_api_base_url(value: str) -> str:
     if not base_url:
         return ""
     return base_url if base_url.rstrip("/").endswith("/v1") else urljoin(base_url, "v1/")
+
+
+def api_url(base_url: str, path: str) -> str:
+    return urljoin(base_url, path.removeprefix("/v1/").lstrip("/"))
 
 
 def parse_json_body(body: bytes) -> dict[str, Any]:
@@ -377,6 +615,30 @@ def count_from_response(data: dict[str, Any]) -> int | None:
         return count
     items = data.get("items")
     return len(items) if isinstance(items, list) else None
+
+
+def watchlist_contains_ticker(body: dict[str, Any], ticker: str) -> bool:
+    data = response_payload(body)
+    if not isinstance(data, dict):
+        return False
+    items = data.get("items")
+    if not isinstance(items, list):
+        return False
+    return any(isinstance(item, dict) and item.get("ticker") == ticker for item in items)
+
+
+def watchlist_item_matches(body: dict[str, Any], expected: dict[str, Any]) -> bool:
+    data = response_payload(body)
+    if not isinstance(data, dict):
+        return False
+    return all(data.get(key) == value for key, value in expected.items())
+
+
+def first_failure_status(*responses: HttpResponse) -> int | None:
+    for response in responses:
+        if response.status_code is None or response.status_code >= 400:
+            return response.status_code
+    return responses[-1].status_code if responses else None
 
 
 if __name__ == "__main__":

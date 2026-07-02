@@ -386,6 +386,27 @@ Resume checklist:
   after the smoke finishes. `STOCKBRIEF_AUTH_BEARER_TOKEN` is still supported
   for local use, but prefer `--token-file` for PR evidence runs.
 
+  To verify the account watchlist write path, run the same helper with the
+  explicit write-cycle option and a ticker that is not already in the smoke
+  user's watchlist:
+
+  ```bash
+  uv run python scripts/check_hosted_auth_smoke.py \
+    --token-file /tmp/stockbrief-auth-token.txt \
+    --check-watchlist-write \
+    --watchlist-ticker 005930
+  ```
+
+  The write-cycle check performs `POST /v1/me/watchlist`, `PATCH
+  /v1/me/watchlist/{ticker}`, `DELETE /v1/me/watchlist/{ticker}`, and a final
+  cleanup confirmation. If the ticker already exists in the user's watchlist,
+  the helper stops before writing and reports `preexisting_watchlist_item`.
+  If the ticker appears between the pre-check and `POST`, the helper requires
+  the `POST` response to echo the smoke marker before it runs `PATCH` or
+  `DELETE`; otherwise it stops with `concurrent_watchlist_item_detected`.
+  PR evidence must still include only the redacted summary fields, not the
+  ticker, memo, bearer token, token file path, email, or raw response body.
+
 Current dev resume baseline:
 
 - The active dev profile currently uses `chat_provider = "bedrock"` with

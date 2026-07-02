@@ -179,8 +179,14 @@ def test_hosted_auth_smoke_runbook_documents_redacted_validation() -> None:
     assert "--token-file" in deployment_doc
     assert "STOCKBRIEF_AUTH_BEARER_TOKEN" in deployment_doc
     assert "Do not paste the bearer token, token file path, email, or" in deployment_doc
+    assert "--check-watchlist-write" in deployment_doc
+    assert "--watchlist-ticker 005930" in deployment_doc
+    assert "preexisting_watchlist_item" in deployment_doc
+    assert "concurrent_watchlist_item_detected" in deployment_doc
     assert "DEFAULT_AUTH_API_PATHS" in script
     assert "/v1/me/chat-sessions" in script
+    assert "check_watchlist_write" in script
+    assert "auth_api:/v1/me/watchlist:write_cycle" in script
 
 
 def test_cloud_completion_audit_documents_current_terraform_drift_classification() -> None:

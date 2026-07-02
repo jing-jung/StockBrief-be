@@ -81,6 +81,101 @@ class FakeFetcher:
         return smoke.HttpResponse(status_code=200, body=b"<html>ok</html>")
 
 
+class WatchlistWriteRequester:
+    def __init__(
+        self,
+        *,
+        preexisting: bool = False,
+        concurrent_existing_on_post: bool = False,
+        fail_delete: bool = False,
+    ) -> None:
+        self.items = {"005930"} if preexisting else set()
+        self.concurrent_existing_on_post = concurrent_existing_on_post
+        self.fail_delete = fail_delete
+        self.calls: list[tuple[str, str, dict[str, str], dict[str, object] | None, float]] = []
+
+    def __call__(
+        self,
+        url: str,
+        method: str,
+        headers: dict[str, str],
+        body: dict[str, object] | None,
+        timeout_seconds: float,
+    ):
+        self.calls.append((url, method, headers, body, timeout_seconds))
+        if method == "GET" and url.endswith("/me/watchlist"):
+            return smoke.HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {
+                        "data": {
+                            "count": len(self.items),
+                            "items": [
+                                {
+                                    "ticker": ticker,
+                                    "name": "비공개 관심종목",
+                                    "memo": "비공개 메모",
+                                }
+                                for ticker in sorted(self.items)
+                            ],
+                        }
+                    }
+                ).encode("utf-8"),
+            )
+        if method == "POST" and url.endswith("/me/watchlist"):
+            ticker = str(body["ticker"]) if body else ""
+            if self.concurrent_existing_on_post:
+                self.items.add(ticker)
+                return smoke.HttpResponse(
+                    status_code=200,
+                    body=json.dumps(
+                        {
+                            "data": {
+                                "ticker": ticker,
+                                "name": "기존 관심종목",
+                                "market": "KOSPI",
+                                "sector": "기존 섹터",
+                                "memo": "기존 메모",
+                            }
+                        }
+                    ).encode("utf-8"),
+                )
+            self.items.add(ticker)
+            return smoke.HttpResponse(
+                status_code=200,
+                body=json.dumps(
+                    {
+                        "data": {
+                            "ticker": ticker,
+                            "name": body["name"],
+                            "market": body["market"],
+                            "sector": body["sector"],
+                            "memo": body["memo"],
+                        }
+                    }
+                ).encode("utf-8"),
+            )
+        if method == "PATCH" and "/me/watchlist/" in url:
+            ticker = url.rsplit("/", 1)[-1]
+            status_code = 200 if ticker in self.items else 404
+            return smoke.HttpResponse(
+                status_code=status_code,
+                body=json.dumps({"data": {"ticker": ticker, "memo": "updated memo"}}).encode(
+                    "utf-8"
+                ),
+            )
+        if method == "DELETE" and "/me/watchlist/" in url:
+            ticker = url.rsplit("/", 1)[-1]
+            if self.fail_delete:
+                return smoke.HttpResponse(
+                    status_code=500,
+                    body=json.dumps({"error": {"code": "DELETE_FAILED"}}).encode("utf-8"),
+                )
+            self.items.discard(ticker)
+            return smoke.HttpResponse(status_code=204, body=b"")
+        return smoke.HttpResponse(status_code=500, body=b"{}")
+
+
 def test_hosted_auth_smoke_requires_auth_token_for_api_checks(monkeypatch) -> None:
     monkeypatch.delenv("STOCKBRIEF_AUTH_BEARER_TOKEN", raising=False)
 
@@ -139,6 +234,103 @@ def test_hosted_auth_smoke_redacts_token_email_and_raw_response(monkeypatch) -> 
     }
     auth_headers = [headers for _, headers, _ in fetcher.calls[3:]]
     assert all(headers.get("Authorization") == "Bearer secret-token" for headers in auth_headers)
+
+
+def test_hosted_auth_smoke_can_run_redacted_watchlist_write_cycle(monkeypatch) -> None:
+    monkeypatch.setenv("STOCKBRIEF_AUTH_BEARER_TOKEN", "secret-token")
+    requester = WatchlistWriteRequester()
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        check_watchlist_write=True,
+        fetch=FakeFetcher(),
+        request_json=requester,
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    write_check = result["checks"]["auth_api:/v1/me/watchlist:write_cycle"]
+    assert result["ok"] is True
+    assert write_check["summary"] == {
+        "response_shape": "watchlist_write_cycle",
+        "contract_ok": True,
+        "preexisting_item": False,
+        "created": True,
+        "updated": True,
+        "deleted": True,
+        "cleanup_confirmed": True,
+    }
+    assert "secret-token" not in serialized
+    assert "005930" not in serialized
+    assert "created memo" not in serialized
+    assert "updated memo" not in serialized
+    assert [method for _, method, _, _, _ in requester.calls] == [
+        "GET",
+        "POST",
+        "PATCH",
+        "DELETE",
+        "GET",
+    ]
+
+
+def test_hosted_auth_smoke_does_not_mutate_preexisting_watchlist_item(monkeypatch) -> None:
+    monkeypatch.setenv("STOCKBRIEF_AUTH_BEARER_TOKEN", "secret-token")
+    requester = WatchlistWriteRequester(preexisting=True)
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        check_watchlist_write=True,
+        fetch=FakeFetcher(),
+        request_json=requester,
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    write_check = result["checks"]["auth_api:/v1/me/watchlist:write_cycle"]
+    assert result["ok"] is False
+    assert write_check["error_code"] == "preexisting_watchlist_item"
+    assert write_check["summary"]["preexisting_item"] is True
+    assert "005930" not in serialized
+    assert [method for _, method, _, _, _ in requester.calls] == ["GET"]
+
+
+def test_hosted_auth_smoke_stops_when_post_returns_concurrent_existing_item(monkeypatch) -> None:
+    monkeypatch.setenv("STOCKBRIEF_AUTH_BEARER_TOKEN", "secret-token")
+    requester = WatchlistWriteRequester(concurrent_existing_on_post=True)
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        check_watchlist_write=True,
+        fetch=FakeFetcher(),
+        request_json=requester,
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    write_check = result["checks"]["auth_api:/v1/me/watchlist:write_cycle"]
+    assert result["ok"] is False
+    assert write_check["error_code"] == "concurrent_watchlist_item_detected"
+    assert write_check["summary"]["created"] is False
+    assert "005930" not in serialized
+    assert "기존 메모" not in serialized
+    assert [method for _, method, _, _, _ in requester.calls] == ["GET", "POST"]
+
+
+def test_hosted_auth_smoke_requires_auth_api_for_watchlist_write(monkeypatch) -> None:
+    monkeypatch.delenv("STOCKBRIEF_AUTH_BEARER_TOKEN", raising=False)
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        check_auth_api=False,
+        check_watchlist_write=True,
+        fetch=FakeFetcher(),
+        request_json=WatchlistWriteRequester(),
+    )
+
+    assert result["ok"] is False
+    assert {"code": "watchlist_write_requires_auth_api"} in result["blockers"]
+    assert result["checks"] == {}
 
 
 def test_hosted_auth_smoke_reads_token_file_without_printing_it(monkeypatch, tmp_path) -> None:
