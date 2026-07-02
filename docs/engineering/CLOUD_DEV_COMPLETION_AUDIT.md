@@ -373,8 +373,9 @@ the current dev baseline:
    runtime API behavior.
 7. Recommendation quality, hosted page auth smoke, and FE hosted
    evidence/watchlist smoke all returned `ok=true` on 2026-07-02.
-8. NAT/scheduler cost posture is intentionally chosen for the current work
-   window: both are active because live provider ingestion work is active.
+8. NAT/scheduler cost posture is pause-first for the current dev baseline:
+   both are disabled after BE #275, and reactivation requires a reviewed live
+   provider ingestion window.
 
 Candidate next product checks after those gates:
 

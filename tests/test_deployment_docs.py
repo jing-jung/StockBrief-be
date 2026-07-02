@@ -362,6 +362,9 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "NAT Gateway: `nat-06de3faa3d9831ce4`, state `deleted`" in audit_doc
     assert "EIP allocation `eipalloc-099e616e0e7f6d2a1`: `InvalidAllocationID.NotFound`" in audit_doc
     assert "AgentCore Runtime is disabled" in audit_doc
+    assert "NAT/scheduler cost posture is pause-first for the current dev baseline" in audit_doc
+    assert "both are disabled after BE #275" in audit_doc
+    assert "both are active because live provider ingestion work is active" not in audit_doc
 
 
 def test_deploy_account_guard_accepts_matching_accounts(tmp_path: Path) -> None:
