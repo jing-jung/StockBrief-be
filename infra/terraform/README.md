@@ -374,10 +374,26 @@ lambda_nat_route_subnet_ids = [
 ]
 ```
 
-When `lambda_nat_create_public_subnet=true`, Terraform discovers the VPC
-Internet Gateway automatically. If the VPC does not have one, set
-`lambda_nat_create_internet_gateway=true` so Terraform creates and attaches it.
-If discovery is ambiguous, set `lambda_nat_internet_gateway_id` explicitly.
+When `lambda_nat_create_public_subnet=true`, direct Terraform runs can discover
+the VPC Internet Gateway automatically. For `backend-dev-deploy`, make this
+choice explicit: set `lambda_nat_create_internet_gateway=true` when Terraform
+should create and attach an Internet Gateway, or set
+`lambda_nat_internet_gateway_id` to a reviewed existing Internet Gateway. The
+deploy profile validation fails early without one of those values so operators
+do not have to infer the fix from Terraform's `no matching Internet Gateway
+found` data-source error.
+
+Troubleshooting:
+
+- `lambda_nat_create_public_subnet=true` with no IGW in the VPC: set
+  `lambda_nat_create_internet_gateway=true` and review the plan for the new
+  Internet Gateway and public route.
+- `lambda_nat_create_public_subnet=true` with an existing reviewed IGW: set
+  `lambda_nat_internet_gateway_id` explicitly instead of relying on auto
+  discovery in the GitHub deploy workflow.
+- `no matching Internet Gateway found`: the VPC has no discoverable attached
+  IGW for the NAT public subnet route. Re-run with one of the two explicit IGW
+  settings above.
 
 Current dev live ingestion settings:
 

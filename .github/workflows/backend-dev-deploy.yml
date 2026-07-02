@@ -195,6 +195,19 @@ jobs:
                           "lambda_nat_create_public_subnet=true requires "
                           "lambda_nat_public_subnet_cidr_block."
                       )
+                  if (
+                      nat_create_public_subnet
+                      and not nat_create_internet_gateway
+                      and not nat_internet_gateway_id
+                  ):
+                      semantic_errors.append(
+                          "lambda_nat_create_public_subnet=true requires either "
+                          "lambda_nat_create_internet_gateway=true or "
+                          "lambda_nat_internet_gateway_id in backend-dev-deploy; "
+                          "otherwise Terraform auto-discovers an Internet Gateway "
+                          "attached to vpc_id and may fail with "
+                          "'no matching Internet Gateway found'."
+                      )
                   if nat_create_internet_gateway and nat_internet_gateway_id:
                       semantic_errors.append(
                           "enable_lambda_nat_egress must use either "

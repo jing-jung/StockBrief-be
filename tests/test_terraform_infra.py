@@ -327,6 +327,8 @@ def test_backend_dev_deploy_validates_semantic_tfvars_json() -> None:
     assert "VPC-attached Lambda with chat_provider=bedrock/agentcore" in workflow
     assert "lambda_nat_public_subnet_id/lambda_nat_route_subnet_ids" in workflow
     assert "lambda_nat_create_public_subnet=true requires" in workflow
+    assert "lambda_nat_internet_gateway_id in backend-dev-deploy" in workflow
+    assert "no matching Internet Gateway found" in workflow
     assert "lambda_nat_create_internet_gateway=true, not both" in workflow
     assert "agentcore_network_mode=VPC requires managed networking" in workflow
 
@@ -420,6 +422,8 @@ def test_lambda_nat_egress_is_toggleable_and_disabled_by_default() -> None:
     assert "lambda_nat_create_public_subnet=true" in terraform_readme
     assert "lambda_nat_public_subnet_cidr_block" in terraform_readme
     assert "lambda_nat_create_internet_gateway=true" in terraform_readme
+    assert "lambda_nat_internet_gateway_id" in terraform_readme
+    assert "no matching Internet Gateway found" in terraform_readme
     assert "NAT Gateway hourly and data processing costs" in terraform_readme
     assert "Do not include" in terraform_readme
     assert "`lambda_nat_public_subnet_id` in `lambda_nat_route_subnet_ids`" in terraform_readme
