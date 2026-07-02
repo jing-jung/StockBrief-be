@@ -31,14 +31,21 @@ resuming product-flow work:
 
 ```bash
 STOCKBRIEF_API_BASE_URL="https://hazfha7995.execute-api.ap-northeast-2.amazonaws.com" \
-  uv run python scripts/check_recommendation_quality_smoke.py --ticker 005930
+  uv run python scripts/check_recommendation_quality_smoke.py \
+    --limit 3 \
+    --max-detail-tickers 3
 ```
+
+Use `--ticker 005930` when a PR needs to prove one specific candidate only. If
+`--ticker` is omitted, the helper selects up to `--max-detail-tickers` tickers
+from the candidate list and checks each selected candidate's detail and evidence
+contracts.
 
 The script calls:
 
 - `GET /v1/stocks/candidates`
-- `GET /v1/stocks/candidates/{ticker}`
-- `GET /v1/stocks/{ticker}/evidence`
+- `GET /v1/stocks/candidates/{ticker}` for each selected ticker
+- `GET /v1/stocks/{ticker}/evidence` for each selected ticker
 
 The output is redacted by design. It reports counts, basis dates, source type
 coverage, provider URL/date coverage, internal score source identifier coverage,
@@ -68,8 +75,9 @@ Use this short summary in PRs or issue comments:
 ```text
 Recommendation quality smoke:
 - candidate list: pass, count=<n>, first_ticker=<ticker>
-- candidate detail: pass, evidence_level=<level>, evidence_count=<n>, risk_tag_count=<n>
-- stock evidence: pass, evidence_count=<n>, source_types=<types>
+- selected_tickers=<ticker_a>,<ticker_b>,<ticker_c>
+- candidate detail: pass for selected tickers, evidence_count>=<n>, risk_tag_count>=1
+- stock evidence: pass for selected tickers, evidence_count>=<n>, source_types=<types>
 - provider evidence: url_coverage=<n>/<n>, published_at_coverage=<n>/<n>
 - internal score evidence: source_identifier_coverage=<n>/<n>, as_of_date_coverage=<n>/<n>
 - remaining blockers: none

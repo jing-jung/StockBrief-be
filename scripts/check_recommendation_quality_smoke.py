@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         api_base_url=args.api_base_url,
         ticker=args.ticker,
         limit=args.limit,
+        max_detail_tickers=args.max_detail_tickers,
         min_evidence_count=args.min_evidence_count,
         timeout_seconds=args.timeout_seconds,
     )
@@ -71,6 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--ticker", default="")
     parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--max-detail-tickers", type=int, default=3)
     parser.add_argument("--min-evidence-count", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     return parser.parse_args(argv)
@@ -81,6 +83,7 @@ def run_smoke(
     api_base_url: str,
     ticker: str = "",
     limit: int = 3,
+    max_detail_tickers: int = 3,
     min_evidence_count: int = 2,
     timeout_seconds: float = 10.0,
     fetch: Fetch | None = None,
@@ -91,6 +94,7 @@ def run_smoke(
             "ok": False,
             "api_base_url_configured": False,
             "selected_ticker": "",
+            "selected_tickers": [],
             "checks": {},
             "blockers": [{"code": "missing_api_base_url", "env": DEFAULT_API_ENV}],
         }
@@ -107,25 +111,35 @@ def run_smoke(
     )
     checks[list_result.name] = list_result.as_dict()
 
-    selected_ticker = ticker or str(list_result.summary.get("first_ticker", ""))
-    if selected_ticker:
-        detail_result = check_candidate_detail(
-            base_url=normalized_base_url,
-            ticker=selected_ticker,
-            min_evidence_count=min_evidence_count,
-            timeout_seconds=timeout_seconds,
-            fetch=fetcher,
-        )
-        checks[detail_result.name] = detail_result.as_dict()
+    selected_tickers = select_detail_tickers(
+        explicit_ticker=ticker,
+        listed_tickers=list_result.summary.get("tickers", []),
+        max_detail_tickers=max_detail_tickers,
+    )
+    if selected_tickers:
+        use_ticker_suffix = len(selected_tickers) > 1
+        for selected_ticker in selected_tickers:
+            detail_result = check_candidate_detail(
+                base_url=normalized_base_url,
+                ticker=selected_ticker,
+                min_evidence_count=min_evidence_count,
+                timeout_seconds=timeout_seconds,
+                fetch=fetcher,
+            )
+            checks[check_name(detail_result.name, selected_ticker, use_ticker_suffix)] = (
+                detail_result.as_dict()
+            )
 
-        evidence_result = check_stock_evidence(
-            base_url=normalized_base_url,
-            ticker=selected_ticker,
-            min_evidence_count=min_evidence_count,
-            timeout_seconds=timeout_seconds,
-            fetch=fetcher,
-        )
-        checks[evidence_result.name] = evidence_result.as_dict()
+            evidence_result = check_stock_evidence(
+                base_url=normalized_base_url,
+                ticker=selected_ticker,
+                min_evidence_count=min_evidence_count,
+                timeout_seconds=timeout_seconds,
+                fetch=fetcher,
+            )
+            checks[check_name(evidence_result.name, selected_ticker, use_ticker_suffix)] = (
+                evidence_result.as_dict()
+            )
     else:
         checks["candidate_detail"] = CheckResult(
             ok=False,
@@ -140,7 +154,8 @@ def run_smoke(
     return {
         "ok": bool(checks) and not blockers,
         "api_base_url_configured": True,
-        "selected_ticker": selected_ticker,
+        "selected_ticker": selected_tickers[0] if selected_tickers else "",
+        "selected_tickers": selected_tickers,
         "checks": checks,
         "blockers": blockers,
     }
@@ -183,6 +198,7 @@ def check_candidate_list(
     if weak_items:
         blockers.append({"code": "candidate_evidence_below_minimum", "items": weak_items})
 
+    item_tickers = candidate_tickers(items)
     first_item = items[0] if items else {}
     return CheckResult(
         ok=not blockers,
@@ -192,6 +208,7 @@ def check_candidate_list(
         summary={
             "count": len(items) if isinstance(items, list) else 0,
             "first_ticker": first_item.get("ticker") if isinstance(first_item, dict) else "",
+            "tickers": item_tickers,
             "as_of": data.get("as_of") if isinstance(data, dict) else None,
         },
         blockers=blockers,
@@ -430,6 +447,46 @@ def collect_blockers(checks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         for blocker in check.get("blockers", []):
             blockers.append({"check": check_name, **blocker})
     return blockers
+
+
+def candidate_tickers(items: Any) -> list[str]:
+    if not isinstance(items, list):
+        return []
+
+    tickers: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get("ticker") or "").strip()
+        if ticker:
+            tickers.append(ticker)
+    return tickers
+
+
+def select_detail_tickers(
+    *,
+    explicit_ticker: str,
+    listed_tickers: Any,
+    max_detail_tickers: int,
+) -> list[str]:
+    ticker = explicit_ticker.strip()
+    if ticker:
+        return [ticker]
+    if max_detail_tickers <= 0 or not isinstance(listed_tickers, list):
+        return []
+
+    selected: list[str] = []
+    for listed_ticker in listed_tickers:
+        ticker = str(listed_ticker or "").strip()
+        if ticker and ticker not in selected:
+            selected.append(ticker)
+        if len(selected) >= max_detail_tickers:
+            break
+    return selected
+
+
+def check_name(base_name: str, ticker: str, use_ticker_suffix: bool) -> str:
+    return f"{base_name}:{ticker}" if use_ticker_suffix else base_name
 
 
 def normalize_api_base_url(api_base_url: str) -> str:
