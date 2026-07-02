@@ -369,16 +369,22 @@ Resume checklist:
   ```bash
   export STOCKBRIEF_HOSTED_URL="https://main.d20hgo2k8atldu.amplifyapp.com"
   export STOCKBRIEF_API_BASE_URL="$(terraform output -raw api_base_url)/v1"
-  export STOCKBRIEF_AUTH_BEARER_TOKEN="REPLACE_WITH_SHORT_LIVED_TOKEN"
+  install -m 600 /dev/null /tmp/stockbrief-auth-token.txt
+  $EDITOR /tmp/stockbrief-auth-token.txt
 
-  uv run python scripts/check_hosted_auth_smoke.py
+  uv run python scripts/check_hosted_auth_smoke.py \
+    --token-file /tmp/stockbrief-auth-token.txt
+
+  rm -f /tmp/stockbrief-auth-token.txt
   ```
 
   The helper checks `/`, `/account`, `/auth/callback`, `GET /v1/me`,
   `GET /v1/me/preferences`, `GET /v1/me/watchlist`, and
   `GET /v1/me/chat-sessions`. PR evidence should include only the redacted JSON
-  result. Do not paste the bearer token, email, or raw response body. Do not
-  paste watchlist item bodies.
+  result. Do not paste the bearer token, token file path, email, or raw response
+  body. Do not paste watchlist item bodies. Delete the temporary token file
+  after the smoke finishes. `STOCKBRIEF_AUTH_BEARER_TOKEN` is still supported
+  for local use, but prefer `--token-file` for PR evidence runs.
 
 Current dev resume baseline:
 

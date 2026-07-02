@@ -8,6 +8,7 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
@@ -60,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         hosted_url=args.hosted_url,
         api_base_url=args.api_base_url,
         token_env=args.token_env,
+        token_file=args.token_file,
         check_pages=not args.skip_pages,
         check_auth_api=not args.skip_auth_api,
         timeout_seconds=args.timeout_seconds,
@@ -83,6 +85,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="API base URL. Both https://... and https://.../v1 are accepted.",
     )
     parser.add_argument("--token-env", default=DEFAULT_TOKEN_ENV)
+    parser.add_argument(
+        "--token-file",
+        default="",
+        help="Read the short-lived bearer token from a local file instead of an environment variable.",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=10.0)
     parser.add_argument("--skip-pages", action="store_true")
     parser.add_argument("--skip-auth-api", action="store_true")
@@ -94,6 +101,7 @@ def run_smoke(
     hosted_url: str,
     api_base_url: str,
     token_env: str = DEFAULT_TOKEN_ENV,
+    token_file: str = "",
     check_pages: bool = True,
     check_auth_api: bool = True,
     timeout_seconds: float = 10.0,
@@ -110,9 +118,12 @@ def run_smoke(
     if check_auth_api and not normalized_api_base_url:
         blockers.append({"code": "missing_api_base_url"})
 
-    token = os.environ.get(token_env, "").strip() if check_auth_api else ""
-    if check_auth_api and not token:
-        blockers.append({"code": "missing_auth_token", "env": token_env})
+    token, token_blockers = read_auth_token(
+        token_env=token_env,
+        token_file=token_file,
+        check_auth_api=check_auth_api,
+    )
+    blockers.extend(token_blockers)
 
     if blockers:
         return {
@@ -257,6 +268,31 @@ def parse_json_body(body: bytes) -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def read_auth_token(
+    *,
+    token_env: str,
+    token_file: str,
+    check_auth_api: bool,
+) -> tuple[str, list[dict[str, str]]]:
+    if not check_auth_api:
+        return "", []
+
+    token_path = token_file.strip()
+    if token_path:
+        try:
+            token = Path(token_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return "", [{"code": "missing_auth_token_file"}]
+        if not token:
+            return "", [{"code": "empty_auth_token_file"}]
+        return token, []
+
+    token = os.environ.get(token_env, "").strip()
+    if token:
+        return token, []
+    return "", [{"code": "missing_auth_token", "env": token_env}]
 
 
 def summarize_api_response(path: str, body: dict[str, Any]) -> dict[str, Any]:

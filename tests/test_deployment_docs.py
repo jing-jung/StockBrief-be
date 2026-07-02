@@ -176,8 +176,9 @@ def test_hosted_auth_smoke_runbook_documents_redacted_validation() -> None:
     )
 
     assert "scripts/check_hosted_auth_smoke.py" in deployment_doc
+    assert "--token-file" in deployment_doc
     assert "STOCKBRIEF_AUTH_BEARER_TOKEN" in deployment_doc
-    assert "Do not paste the bearer token, email, or" in deployment_doc
+    assert "Do not paste the bearer token, token file path, email, or" in deployment_doc
     assert "DEFAULT_AUTH_API_PATHS" in script
     assert "/v1/me/chat-sessions" in script
 

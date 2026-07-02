@@ -222,8 +222,13 @@ Page-only evidence captured on 2026-07-02:
 Full API auth smoke requires a short-lived browser session token:
 
 ```bash
-export STOCKBRIEF_AUTH_BEARER_TOKEN="REPLACE_WITH_SHORT_LIVED_TOKEN"
-uv run python scripts/check_hosted_auth_smoke.py
+install -m 600 /dev/null /tmp/stockbrief-auth-token.txt
+$EDITOR /tmp/stockbrief-auth-token.txt
+
+uv run python scripts/check_hosted_auth_smoke.py \
+  --token-file /tmp/stockbrief-auth-token.txt
+
+rm -f /tmp/stockbrief-auth-token.txt
 ```
 
 BE #225 captured a full hosted auth API smoke on 2026-06-29 after the helper
@@ -238,7 +243,8 @@ was updated to accept both wrapped and top-level protected API response shapes:
 - the temporary Cognito smoke user was deleted after the run
 
 Only paste the redacted JSON result. Never paste the bearer token, email,
-watchlist item body, chat title, or raw protected API response body.
+token file path, watchlist item body, chat title, or raw protected API response
+body. Delete the temporary token file after the smoke finishes.
 
 ### FE Hosted Live Evidence Smoke
 

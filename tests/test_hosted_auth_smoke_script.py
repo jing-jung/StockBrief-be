@@ -141,6 +141,78 @@ def test_hosted_auth_smoke_redacts_token_email_and_raw_response(monkeypatch) -> 
     assert all(headers.get("Authorization") == "Bearer secret-token" for headers in auth_headers)
 
 
+def test_hosted_auth_smoke_reads_token_file_without_printing_it(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("STOCKBRIEF_AUTH_BEARER_TOKEN", raising=False)
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret-token\n", encoding="utf-8")
+    fetcher = FakeFetcher()
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        token_file=str(token_file),
+        fetch=fetcher,
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert result["ok"] is True
+    assert "file-secret-token" not in serialized
+    assert str(token_file) not in serialized
+    auth_headers = [headers for _, headers, _ in fetcher.calls[3:]]
+    assert all(headers.get("Authorization") == "Bearer file-secret-token" for headers in auth_headers)
+
+
+def test_hosted_auth_smoke_prefers_explicit_token_file_over_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STOCKBRIEF_AUTH_BEARER_TOKEN", "env-secret-token")
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret-token\n", encoding="utf-8")
+    fetcher = FakeFetcher()
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        token_file=str(token_file),
+        fetch=fetcher,
+    )
+
+    assert result["ok"] is True
+    auth_headers = [headers for _, headers, _ in fetcher.calls[3:]]
+    assert all(headers.get("Authorization") == "Bearer file-secret-token" for headers in auth_headers)
+
+
+def test_hosted_auth_smoke_reports_missing_token_file_without_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("STOCKBRIEF_AUTH_BEARER_TOKEN", raising=False)
+    token_file = tmp_path / "missing-token.txt"
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        token_file=str(token_file),
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert result["ok"] is False
+    assert {"code": "missing_auth_token_file"} in result["blockers"]
+    assert str(token_file) not in serialized
+
+
+def test_hosted_auth_smoke_reports_empty_token_file_without_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("STOCKBRIEF_AUTH_BEARER_TOKEN", raising=False)
+    token_file = tmp_path / "empty-token.txt"
+    token_file.write_text("\n", encoding="utf-8")
+
+    result = smoke.run_smoke(
+        hosted_url="https://main.example.amplifyapp.com",
+        api_base_url="https://api.example.com",
+        token_file=str(token_file),
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert result["ok"] is False
+    assert {"code": "empty_auth_token_file"} in result["blockers"]
+    assert str(token_file) not in serialized
+
+
 def test_hosted_auth_smoke_accepts_top_level_protected_api_responses(monkeypatch) -> None:
     monkeypatch.setenv("STOCKBRIEF_AUTH_BEARER_TOKEN", "secret-token")
 
