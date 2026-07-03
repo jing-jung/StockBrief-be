@@ -322,14 +322,15 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     ).read_text(encoding="utf-8")
 
     assert "# Cloud Dev Completion Audit" in audit_doc
-    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`" in audit_doc
+    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`" in audit_doc
     assert "FE-to-BE integration" in audit_doc
     assert "toolchain migration" in audit_doc
     assert "Other teammate" in audit_doc
     assert "완료" in audit_doc
 
-    assert "BE `main` is at `813bbfe`" in audit_doc
-    assert "FE `main` is at `7c58fd7`" in audit_doc
+    assert "BE `main` is at `f156e4f` after BE #285" in audit_doc
+    assert "FE `main` is at `b103515` after FE #109" in audit_doc
+    assert "latest hosted product smoke evidence remains the FE #118 search-page run" in audit_doc
     assert "`GET /v1/health`" in audit_doc
     assert "`GET /v1/recommendations/candidates?limit=3`" in audit_doc
     assert "scripts/check_recommendation_quality_smoke.py --limit 3 --max-detail-tickers 3" in audit_doc

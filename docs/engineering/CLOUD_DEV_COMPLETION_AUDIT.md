@@ -7,7 +7,7 @@ implementation because those were owned by other teammates.
 Audit date: 2026-07-03
 AWS account: `560271561793`
 Region: `ap-northeast-2`
-Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`
+Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`
 
 Do not paste API keys, access tokens, secret values, raw provider payloads, raw
 model answers, user emails, watchlist item bodies, or chat titles into PR
@@ -28,7 +28,7 @@ evidence. Use the redacted helper outputs and summarize only status fields.
 
 | Category | Status | Evidence | Next action |
 | --- | --- | --- | --- |
-| Latest main baseline | 완료 | BE `main` is at `813bbfe` after BE #283; FE `main` is at `7c58fd7` after FE #118 merged the hosted search smoke. | Start all new BE work from latest `main`. |
+| Latest main baseline | 완료 | BE `main` is at `f156e4f` after BE #285; FE `main` is at `b103515` after FE #109. The latest hosted product smoke evidence remains the FE #118 search-page run. | Start all new BE work from latest `main`. |
 | Deploy profile source | 완료 | BE #252 made GitHub Environment `TFVARS_JSON` and `TF_BACKEND_CONFIG_HCL` the source of truth for `backend-dev-deploy`. | Keep runner-rendered tfvars/backend files out of the repository. |
 | Terraform apply | 완료 | `backend-dev-deploy` run `28560982229` applied NAT/scheduler resources for the live window; run `28561585744` deployed the #254 Lambda package; run `28574501920` applied the #275 cost pause. | Inspect the deploy run after every merge or Environment tfvars change. |
 | API Gateway and Lambda API | 완료 | `GET /v1/health` returned `status=ok`, `service=stockbrief-api`, `environment=dev`. | Continue using deployed smoke before release or after resume. |
