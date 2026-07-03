@@ -341,8 +341,11 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "pnpm run smoke:hosted-evidence --" in audit_doc
     assert "FE #104 originally added this smoke" in audit_doc
     assert "FE #112 expanded the hosted smoke to include the guest watchlist" in audit_doc
+    assert "FE #116 expanded it again to include hosted account and auth callback" in audit_doc
     assert "`/watchlist`: HTTP 200, watchlist heading and guest localStorage copy present" in audit_doc
-    assert "evidence/watchlist smoke all returned `ok=true`" in audit_doc
+    assert "`/account`: HTTP 200, account heading" in audit_doc
+    assert "`/auth/callback`: HTTP 200, callback heading" in audit_doc
+    assert "evidence/watchlist/auth-page smoke all returned `ok=true`" in audit_doc
     assert "scripts/check_ingestion_smoke.py" in audit_doc
     assert "matched_terms=[]" in audit_doc
     assert "ready_for_manual_ingestion=true" in audit_doc

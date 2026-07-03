@@ -36,7 +36,7 @@ evidence. Use the redacted helper outputs and summarize only status fields.
 | Recommendation quality | 완료 | `scripts/check_recommendation_quality_smoke.py --limit 3 --max-detail-tickers 3` returned `ok=true`; selected tickers `005930`, `207940`, `000660`; each detail returned 8 score components with weight sum `100`; blockers `[]`. | Re-run before product-flow work that changes candidate quality or evidence joins. |
 | Cognito | 완료 | Terraform outputs include user pool `ap-northeast-2_VPOccT5rI`, issuer, app client, and Hosted UI domain; BE #225 verified the full protected API smoke with a short-lived token. | Re-run full hosted auth smoke after Cognito, callback, account API, or Amplify domain changes. |
 | Amplify hosted pages | 완료 | Page-only hosted smoke for `/`, `/account`, and `/auth/callback` returned HTTP 200 at `https://main.d20hgo2k8atldu.amplifyapp.com`. | Re-run hosted page smoke after FE deploy or Amplify config changes. |
-| FE live evidence visibility | 완료 | FE hosted evidence/watchlist smoke returned `ok=true` with `/`, `/stocks/005930`, and `/watchlist` all HTTP 200 and no missing page markers. | Re-run after FE detail/recommendation/watchlist UI, API base, or Amplify deploy changes. |
+| FE live evidence visibility | 완료 | FE hosted evidence/watchlist/auth-page smoke returned `ok=true` with `/`, `/stocks/005930`, `/watchlist`, `/account`, and `/auth/callback` all HTTP 200 and no missing page markers. | Re-run after FE detail/recommendation/watchlist/account UI, auth callback, API base, or Amplify deploy changes. |
 | RDS | 완료 | `stockbrief-dev-postgres` is available, PostgreSQL `16.13`, deletion protection `false`, backup retention `1`. | Stop RDS during inactive cost windows per `DEPLOYMENT_BOOTSTRAP.md`. |
 | RDS Proxy | 완료 | Terraform output `rds_proxy_endpoint` is empty and `enable_rds_proxy=false`. | Keep disabled until Lambda concurrency requires pooling. |
 | Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true`, model `apac.amazon.nova-micro-v1:0`, `matched_terms=[]`. | Keep AgentCore Runtime out of this phase. |
@@ -283,13 +283,19 @@ Evidence captured on 2026-07-02:
 - `/stocks/005930`: HTTP 200, score, evidence section, evidence ID, published
   date, and source reference present
 - `/watchlist`: HTTP 200, watchlist heading and guest localStorage copy present
+- `/account`: HTTP 200, account heading, guest continuity copy, and auth entry
+  or config-state marker present
+- `/auth/callback`: HTTP 200, callback heading, recovery copy, and account
+  recovery link present
 - `blockers=[]`
 
 FE #104 originally added this smoke. FE #110 aligned the recommendation
 contract, and FE #112 expanded the hosted smoke to include the guest watchlist
-page. The hosted evidence/watchlist smoke still passes against the current
-hosted FE. Re-run it after any later FE deploy, detail/recommendation/watchlist
-runtime UI change, or API base URL change.
+page. FE #116 expanded it again to include hosted account and auth callback
+page markers. The hosted evidence/watchlist/auth-page smoke still passes
+against the current hosted FE. Re-run it after any later FE deploy,
+detail/recommendation/watchlist/account runtime UI change, auth callback
+change, or API base URL change.
 
 ## Terraform Profile And Drift Notes
 
@@ -372,7 +378,7 @@ the current dev baseline:
 6. FE #110 merged the recommendation candidate contract cleanup without changing
    runtime API behavior.
 7. Recommendation quality, hosted page auth smoke, and FE hosted
-   evidence/watchlist smoke all returned `ok=true` on 2026-07-02.
+   evidence/watchlist/auth-page smoke all returned `ok=true` on 2026-07-02.
 8. NAT/scheduler cost posture is pause-first for the current dev baseline:
    both are disabled after BE #275, and reactivation requires a reviewed live
    provider ingestion window.
