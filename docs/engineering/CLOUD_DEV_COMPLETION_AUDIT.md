@@ -4,10 +4,10 @@ This audit records the current `dev` cloud completion state for StockBrief.
 It intentionally excludes toolchain migration work and FE-to-BE integration
 implementation because those were owned by other teammates.
 
-Audit date: 2026-07-02
+Audit date: 2026-07-03
 AWS account: `560271561793`
 Region: `ap-northeast-2`
-Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`
+Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`
 
 Do not paste API keys, access tokens, secret values, raw provider payloads, raw
 model answers, user emails, watchlist item bodies, or chat titles into PR
@@ -28,7 +28,7 @@ evidence. Use the redacted helper outputs and summarize only status fields.
 
 | Category | Status | Evidence | Next action |
 | --- | --- | --- | --- |
-| Latest main baseline | 완료 | BE `main` fast-forwarded to `06e2e02` after BE #274 and the dev-owen deploy role policy merge; FE `main` remains an external integration surface. | Start all new BE work from latest `main`. |
+| Latest main baseline | 완료 | BE `main` is at `813bbfe` after BE #283; FE `main` is at `7c58fd7` after FE #118 merged the hosted search smoke. | Start all new BE work from latest `main`. |
 | Deploy profile source | 완료 | BE #252 made GitHub Environment `TFVARS_JSON` and `TF_BACKEND_CONFIG_HCL` the source of truth for `backend-dev-deploy`. | Keep runner-rendered tfvars/backend files out of the repository. |
 | Terraform apply | 완료 | `backend-dev-deploy` run `28560982229` applied NAT/scheduler resources for the live window; run `28561585744` deployed the #254 Lambda package; run `28574501920` applied the #275 cost pause. | Inspect the deploy run after every merge or Environment tfvars change. |
 | API Gateway and Lambda API | 완료 | `GET /v1/health` returned `status=ok`, `service=stockbrief-api`, `environment=dev`. | Continue using deployed smoke before release or after resume. |
@@ -36,7 +36,7 @@ evidence. Use the redacted helper outputs and summarize only status fields.
 | Recommendation quality | 완료 | `scripts/check_recommendation_quality_smoke.py --limit 3 --max-detail-tickers 3` returned `ok=true`; selected tickers `005930`, `207940`, `000660`; each detail returned 8 score components with weight sum `100`; blockers `[]`. | Re-run before product-flow work that changes candidate quality or evidence joins. |
 | Cognito | 완료 | Terraform outputs include user pool `ap-northeast-2_VPOccT5rI`, issuer, app client, and Hosted UI domain; BE #225 verified the full protected API smoke with a short-lived token. | Re-run full hosted auth smoke after Cognito, callback, account API, or Amplify domain changes. |
 | Amplify hosted pages | 완료 | Page-only hosted smoke for `/`, `/account`, and `/auth/callback` returned HTTP 200 at `https://main.d20hgo2k8atldu.amplifyapp.com`. | Re-run hosted page smoke after FE deploy or Amplify config changes. |
-| FE live evidence visibility | 완료 | FE hosted evidence/watchlist/auth-page smoke returned `ok=true` with `/`, `/stocks/005930`, `/watchlist`, `/account`, and `/auth/callback` all HTTP 200 and no missing page markers. | Re-run after FE detail/recommendation/watchlist/account UI, auth callback, API base, or Amplify deploy changes. |
+| FE live evidence visibility | 완료 | FE hosted evidence/watchlist/auth/search-page smoke returned `ok=true` with `/`, `/stocks/005930`, `/search?q=삼성전자`, `/watchlist`, `/account`, and `/auth/callback` all HTTP 200 and no missing page markers. | Re-run after FE detail/recommendation/search/watchlist/account UI, auth callback, API base, or Amplify deploy changes. |
 | RDS | 완료 | `stockbrief-dev-postgres` is available, PostgreSQL `16.13`, deletion protection `false`, backup retention `1`. | Stop RDS during inactive cost windows per `DEPLOYMENT_BOOTSTRAP.md`. |
 | RDS Proxy | 완료 | Terraform output `rds_proxy_endpoint` is empty and `enable_rds_proxy=false`. | Keep disabled until Lambda concurrency requires pooling. |
 | Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true`, model `apac.amazon.nova-micro-v1:0`, `matched_terms=[]`. | Keep AgentCore Runtime out of this phase. |
@@ -273,15 +273,20 @@ change, recommendation card change, or API base URL change:
 ```bash
 pnpm run smoke:hosted-evidence -- \
   --hosted-url https://main.d20hgo2k8atldu.amplifyapp.com \
-  --ticker 005930
+  --ticker 005930 \
+  --search-query 삼성전자 \
+  --search-result-name 삼성전자 \
+  --search-result-ticker 005930
 ```
 
-Evidence captured on 2026-07-02:
+Evidence captured on 2026-07-03 after FE #118 merged:
 
 - `ok=true`
 - `/`: HTTP 200, product name and candidate copy present
 - `/stocks/005930`: HTTP 200, score, evidence section, evidence ID, published
   date, and source reference present
+- `/search?q=삼성전자`: HTTP 200, search heading, search copy, `삼성전자`
+  result name, and `/stocks/005930` result link present
 - `/watchlist`: HTTP 200, watchlist heading and guest localStorage copy present
 - `/account`: HTTP 200, account heading, guest continuity copy, and auth entry
   or config-state marker present
@@ -292,9 +297,12 @@ Evidence captured on 2026-07-02:
 FE #104 originally added this smoke. FE #110 aligned the recommendation
 contract, and FE #112 expanded the hosted smoke to include the guest watchlist
 page. FE #116 expanded it again to include hosted account and auth callback
-page markers. The hosted evidence/watchlist/auth-page smoke still passes
-against the current hosted FE. Re-run it after any later FE deploy,
-detail/recommendation/watchlist/account runtime UI change, auth callback
+page markers. FE #118 added the P0 stock search page check and split the search
+query from the expected result ticker so company-name searches can still verify
+the canonical `/stocks/005930` detail link. The hosted
+evidence/watchlist/auth/search-page smoke still passes against the current
+hosted FE. Re-run it after any later FE deploy,
+detail/recommendation/search/watchlist/account runtime UI change, auth callback
 change, or API base URL change.
 
 ## Terraform Profile And Drift Notes
@@ -377,8 +385,9 @@ the current dev baseline:
    post-deploy smoke returned `scheduler_enable_ready=true`.
 6. FE #110 merged the recommendation candidate contract cleanup without changing
    runtime API behavior.
-7. Recommendation quality, hosted page auth smoke, and FE hosted
-   evidence/watchlist/auth-page smoke all returned `ok=true` on 2026-07-02.
+7. Recommendation quality and hosted page auth smoke returned `ok=true` on
+   2026-07-02; FE hosted evidence/watchlist/auth/search-page smoke returned
+   `ok=true` after FE #118 merged on 2026-07-03.
 8. NAT/scheduler cost posture is pause-first for the current dev baseline:
    both are disabled after BE #275, and reactivation requires a reviewed live
    provider ingestion window.

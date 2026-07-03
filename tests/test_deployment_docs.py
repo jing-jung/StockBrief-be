@@ -322,13 +322,14 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     ).read_text(encoding="utf-8")
 
     assert "# Cloud Dev Completion Audit" in audit_doc
-    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`" in audit_doc
+    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`" in audit_doc
     assert "FE-to-BE integration" in audit_doc
     assert "toolchain migration" in audit_doc
     assert "Other teammate" in audit_doc
     assert "완료" in audit_doc
 
-    assert "BE `main` fast-forwarded to `06e2e02`" in audit_doc
+    assert "BE `main` is at `813bbfe`" in audit_doc
+    assert "FE `main` is at `7c58fd7`" in audit_doc
     assert "`GET /v1/health`" in audit_doc
     assert "`GET /v1/recommendations/candidates?limit=3`" in audit_doc
     assert "scripts/check_recommendation_quality_smoke.py --limit 3 --max-detail-tickers 3" in audit_doc
@@ -339,13 +340,18 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "BE #225 captured a full hosted auth API smoke" in audit_doc
     assert "the temporary Cognito smoke user was deleted after the run" in audit_doc
     assert "pnpm run smoke:hosted-evidence --" in audit_doc
+    assert "--search-query 삼성전자" in audit_doc
+    assert "--search-result-ticker 005930" in audit_doc
     assert "FE #104 originally added this smoke" in audit_doc
     assert "FE #112 expanded the hosted smoke to include the guest watchlist" in audit_doc
     assert "FE #116 expanded it again to include hosted account and auth callback" in audit_doc
+    assert "FE #118 added the P0 stock search page check" in audit_doc
+    assert "`/search?q=삼성전자`: HTTP 200, search heading" in audit_doc
+    assert "canonical `/stocks/005930` detail link" in audit_doc
     assert "`/watchlist`: HTTP 200, watchlist heading and guest localStorage copy present" in audit_doc
     assert "`/account`: HTTP 200, account heading" in audit_doc
     assert "`/auth/callback`: HTTP 200, callback heading" in audit_doc
-    assert "evidence/watchlist/auth-page smoke all returned `ok=true`" in audit_doc
+    assert "evidence/watchlist/auth/search-page smoke returned" in audit_doc
     assert "scripts/check_ingestion_smoke.py" in audit_doc
     assert "matched_terms=[]" in audit_doc
     assert "ready_for_manual_ingestion=true" in audit_doc
