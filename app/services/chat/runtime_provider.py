@@ -205,6 +205,8 @@ class AgentCoreChatProvider:
                 agentRuntimeArn=self.runtime_arn,
                 runtimeSessionId=_agentcore_runtime_session_id(payload),
                 payload=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                contentType="application/json",
+                accept="application/json",
                 qualifier=self.qualifier,
             )
             body = response["response"].read()
@@ -232,12 +234,18 @@ def _agentcore_runtime_payload(
     request: ChatProviderInput,
     baseline: ChatResponse,
 ) -> dict[str, Any]:
+    allowed_evidence_ids = set(baseline.used_evidence_ids)
+    evidence = (
+        [item for item in request.evidence if item.id in allowed_evidence_ids]
+        if allowed_evidence_ids
+        else []
+    )
     return {
         "input": {
             "message": request.message,
             "ticker": request.candidate.ticker,
             "candidate": request.candidate.model_dump(mode="json"),
-            "evidence": [item.model_dump(mode="json") for item in request.evidence],
+            "evidence": [item.model_dump(mode="json") for item in evidence],
             "baseline": baseline.model_dump(mode="json"),
         }
     }

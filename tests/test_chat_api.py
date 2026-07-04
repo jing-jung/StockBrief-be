@@ -23,7 +23,7 @@ from app.services.chat import (
     chat_provider_for,
     compose_chat_answer,
 )
-from app.services.chat.providers import BedrockChatProvider
+from app.services.chat.providers import BedrockChatProvider, _validate_answer_citations
 
 
 PROHIBITED_KOREAN_OUTPUT_TERMS = [
@@ -521,6 +521,17 @@ def test_chat_bedrock_prompt_only_includes_guard_allowed_evidence() -> None:
     assert "title=재무 요약" in prompt
     assert "summary=실적 근거입니다." in prompt
     assert "ev_unused" not in prompt
+
+
+def test_chat_citation_guard_accepts_labelled_evidence_id_links() -> None:
+    _validate_answer_citations(
+        answer=(
+            "삼성전자 검토 근거입니다. "
+            "[증거 ID: ev_used_a](https://example.com/a) "
+            "[ev_used_b]"
+        ),
+        allowed_evidence_ids={"ev_used_a", "ev_used_b"},
+    )
 
 
 def test_chat_bedrock_provider_rejects_unsupported_model_citation(

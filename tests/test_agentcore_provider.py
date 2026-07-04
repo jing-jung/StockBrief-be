@@ -1,3 +1,6 @@
+import json
+from io import BytesIO
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -31,6 +34,34 @@ def test_agentcore_provider_factory_uses_settings() -> None:
     assert provider.timeout_seconds == 3
 
 
+def test_agentcore_provider_aws_runtime_invocation_sets_json_content_type() -> None:
+    class FakeAgentCoreClient:
+        request: dict | None = None
+
+        def invoke_agent_runtime(self, **kwargs):
+            self.request = kwargs
+            return {
+                "response": BytesIO(
+                    b'{"status":"success","response":{"answer":"ok"}}'
+                )
+            }
+
+    client = FakeAgentCoreClient()
+    provider = AgentCoreChatProvider(
+        runtime_arn="arn:aws:bedrock-agentcore:ap-northeast-2:123456789012:runtime/test",
+        client=client,
+    )
+    payload = {"input": {"ticker": "005930"}}
+
+    response = provider._invoke_aws_runtime(payload)
+
+    assert response["status"] == "success"
+    assert client.request is not None
+    assert client.request["contentType"] == "application/json"
+    assert client.request["accept"] == "application/json"
+    assert json.loads(client.request["payload"].decode("utf-8")) == payload
+
+
 def test_agentcore_provider_rechecks_runtime_answer(
     seeded_session: Session,
 ) -> None:
@@ -41,20 +72,24 @@ def test_agentcore_provider_rechecks_runtime_answer(
         evidence=request.evidence,
     )
     evidence_id = baseline.used_evidence_ids[0]
+    captured_payload: dict = {}
 
     provider = AgentCoreChatProvider(
         runtime_url="http://runtime.local",
-        runtime_invoker=lambda payload: {
-            "status": "success",
-            "response": {
-                "answer": f"저장된 근거 기준 설명입니다. [{evidence_id}]",
-                "trace": {
-                    "selected_tools": ["get_candidate"],
-                    "tool_calls": [{"name": "get_candidate", "status": "success"}],
-                    "citation_ids": [evidence_id],
+        runtime_invoker=lambda payload: (
+            captured_payload.update(payload)
+            or {
+                "status": "success",
+                "response": {
+                    "answer": f"저장된 근거 기준 설명입니다. [{evidence_id}]",
+                    "trace": {
+                        "selected_tools": ["get_candidate"],
+                        "tool_calls": [{"name": "get_candidate", "status": "success"}],
+                        "citation_ids": [evidence_id],
+                    },
                 },
-            },
-        },
+            }
+        ),
     )
 
     response = provider.compose(request)
@@ -62,6 +97,40 @@ def test_agentcore_provider_rechecks_runtime_answer(
     assert response.answer.endswith(f"[{evidence_id}]")
     assert response.citations == baseline.citations
     assert response.policy_status == "allowed"
+    assert {item["id"] for item in captured_payload["input"]["evidence"]} <= set(
+        baseline.used_evidence_ids
+    )
+
+
+def test_agentcore_provider_blocks_context_citation_not_returned_to_client(
+    seeded_session: Session,
+) -> None:
+    request = _provider_input(seeded_session)
+    baseline = compose_chat_answer(
+        message=request.message,
+        candidate=request.candidate,
+        evidence=request.evidence,
+    )
+    returned_ids = set(baseline.used_evidence_ids)
+    extra_evidence_id = next(
+        item.id for item in request.evidence if item.id not in returned_ids
+    )
+    provider = AgentCoreChatProvider(
+        runtime_url="http://runtime.local",
+        runtime_invoker=lambda payload: {
+            "status": "success",
+            "response": {
+                "answer": f"후보 context의 추가 근거를 인용했습니다. [{extra_evidence_id}]",
+                "trace": {
+                    "selected_tools": ["get_candidate"],
+                    "citation_ids": [extra_evidence_id],
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ChatProviderUnavailable, match="invalid citations"):
+        provider.compose(request)
 
 
 def test_agentcore_provider_blocks_unsafe_runtime_answer(

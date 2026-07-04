@@ -36,6 +36,8 @@ MAX_BEDROCK_MAX_TOKENS = 1200
 MIN_BEDROCK_TIMEOUT_SECONDS = 1.0
 MAX_BEDROCK_TIMEOUT_SECONDS = 30.0
 EVIDENCE_ID_REFERENCE_PATTERN = re.compile(r"\[([A-Za-z0-9][A-Za-z0-9_.:-]{2,})\]")
+BRACKET_CONTENT_PATTERN = re.compile(r"\[([^\]]+)\]")
+EVIDENCE_ID_TOKEN_PATTERN = re.compile(r"\b(ev_[A-Za-z0-9_.:-]+)\b")
 LIKELY_FALSE_POSITIVE_PATTERNS = (
     re.compile(r"(매수|매도)\s*(권유|추천|조언|의견)\s*(?:가|은|는)?\s*아닙니다"),
     re.compile(r"(목표가|진입가|손절가)\s*(?:를|은|는)?\s*(제시|제공|산정)\s*하지\s*않"),  # policy-scan: allow model-output-guard
@@ -539,7 +541,7 @@ def _validate_answer_citations(
     answer: str,
     allowed_evidence_ids: set[str],
 ) -> None:
-    cited_evidence_ids = set(EVIDENCE_ID_REFERENCE_PATTERN.findall(answer))
+    cited_evidence_ids = _cited_evidence_ids(answer)
     unexpected_evidence_ids = cited_evidence_ids - allowed_evidence_ids
     if unexpected_evidence_ids:
         raise ChatProviderUnavailable(
@@ -554,3 +556,10 @@ def _validate_answer_citations(
         raise ChatProviderUnavailable(
             "Bedrock chat provider returned an answer without evidence citations."
         )
+
+
+def _cited_evidence_ids(answer: str) -> set[str]:
+    cited_evidence_ids = set(EVIDENCE_ID_REFERENCE_PATTERN.findall(answer))
+    for bracket_content in BRACKET_CONTENT_PATTERN.findall(answer):
+        cited_evidence_ids.update(EVIDENCE_ID_TOKEN_PATTERN.findall(bracket_content))
+    return cited_evidence_ids
