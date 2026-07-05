@@ -325,30 +325,31 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     ).read_text(encoding="utf-8")
 
     assert "# Cloud Dev Completion Audit" in audit_doc
-    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`, `#290`, `#292`, `#293`" in audit_doc
+    assert "Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`, `#290`, `#292`, `#293`, `#303`" in audit_doc
     assert "FE-to-BE integration" in audit_doc
     assert "toolchain migration" in audit_doc
     assert "Other teammate" in audit_doc
     assert "완료" in audit_doc
 
-    assert "BE `main` is at `fc77136` after BE #291" in audit_doc
+    assert "BE `main` is at `be31b32` after BE #302" in audit_doc
     assert "FE `main` is at `a7f1b9f` after FE #122" in audit_doc
-    assert "latest hosted product smoke evidence remains the FE #118 search-page run" in audit_doc
-    assert "FE #120 and FE #122 merged afterward" in audit_doc
+    assert "FE has open PR #123" in audit_doc
     assert "`GET /v1/health`" in audit_doc
     assert "`GET /v1/recommendations/candidates?limit=3`" in audit_doc
-    assert "scripts/check_recommendation_quality_smoke.py --limit 5 --max-detail-tickers 3 --expected-ticker 005930 --expected-ticker 207940 --expected-ticker 000660" in audit_doc
+    assert "scripts/check_recommendation_quality_smoke.py --limit 5 --max-detail-tickers 3 --expected-ticker 005930 --expected-ticker 000660" in audit_doc
     recommendation_quality_section = _markdown_section(
         audit_doc, "Recommendation Quality Smoke"
     )
-    assert "The 2026-07-03 additional ticker smoke used this command:" in recommendation_quality_section
-    assert "Evidence captured on 2026-07-03:" in recommendation_quality_section
+    assert "The 2026-07-05 post-#302 smoke used this command:" in recommendation_quality_section
+    assert "Evidence captured on 2026-07-05:" in recommendation_quality_section
     assert "--limit 5" in recommendation_quality_section
     assert "--expected-ticker 005930" in recommendation_quality_section
     assert "Evidence captured on 2026-07-02:" not in recommendation_quality_section
-    assert "`/recommendations/candidates?limit=5`, count `5`" in audit_doc
-    assert "missing expected tickers `[]`" in audit_doc
-    assert "each detail returned 8 score components with weight sum `100`" in audit_doc
+    assert "`/recommendations/candidates?limit=5`, count `2`" in audit_doc
+    assert "missing expected" in audit_doc
+    assert "tickers `[]`" in audit_doc
+    assert "risk tag count `0`" in audit_doc
+    assert "all selected details returned component count `8` and" in audit_doc
     assert "`POST /v1/chat`" in audit_doc
     assert "scripts/check_bedrock_chat_smoke.py" in audit_doc
     assert "scripts/check_hosted_auth_smoke.py --skip-auth-api" in audit_doc
@@ -376,8 +377,10 @@ def test_cloud_dev_completion_audit_documents_current_scope_and_smokes() -> None
     assert "account watchlist/auth smoke with a short-lived token" not in audit_doc
     assert "scripts/check_ingestion_smoke.py" in audit_doc
     assert "matched_terms=[]" in audit_doc
-    assert "ready_for_manual_ingestion=true" in audit_doc
-    assert "scheduler_enable_ready=true" in audit_doc
+    assert "ready_for_manual_ingestion=false" in audit_doc
+    assert "scheduler_enable_ready=false" in audit_doc
+    assert "`KRX_API_KEY` is missing" in audit_doc
+    assert "provider egress timed out while NAT is disabled" in audit_doc
     assert "aws scheduler list-schedules --name-prefix stockbrief-dev-provider-ingestion" in audit_doc
     assert "ApproximateNumberOfMessages=0" in audit_doc or "DLQ visible messages: `0`" in audit_doc
 

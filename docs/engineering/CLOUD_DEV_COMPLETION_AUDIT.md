@@ -4,10 +4,10 @@ This audit records the current `dev` cloud completion state for StockBrief.
 It intentionally excludes toolchain migration work and FE-to-BE integration
 implementation because those were owned by other teammates.
 
-Audit date: 2026-07-03
+Audit date: 2026-07-05
 AWS account: `560271561793`
 Region: `ap-northeast-2`
-Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`, `#290`, `#292`, `#293`
+Linked issues: `#211`, `#226`, `#253`, `#255`, `#275`, `#284`, `#286`, `#290`, `#292`, `#293`, `#303`
 
 Do not paste API keys, access tokens, secret values, raw provider payloads, raw
 model answers, user emails, watchlist item bodies, or chat titles into PR
@@ -28,25 +28,25 @@ evidence. Use the redacted helper outputs and summarize only status fields.
 
 | Category | Status | Evidence | Next action |
 | --- | --- | --- | --- |
-| Latest main baseline | 완료 | BE `main` is at `fc77136` after BE #291; FE `main` is at `a7f1b9f` after FE #122. The latest hosted product smoke evidence remains the FE #118 search-page run, with FE #120 and FE #122 merged afterward. | Start all new BE work from latest `main`. |
+| Latest main baseline | 완료 | BE `main` is at `be31b32` after BE #302; FE `main` is at `a7f1b9f` after FE #122. FE has open PR #123, so hosted FE evidence remains the FE #118/#122 main baseline until that PR is reviewed and merged. | Start all new BE work from latest `main`; re-run FE hosted smoke after FE #123 or any later FE runtime UI change merges. |
 | Deploy profile source | 완료 | BE #252 made GitHub Environment `TFVARS_JSON` and `TF_BACKEND_CONFIG_HCL` the source of truth for `backend-dev-deploy`. | Keep runner-rendered tfvars/backend files out of the repository. |
-| Terraform apply | 완료 | `backend-dev-deploy` run `28560982229` applied NAT/scheduler resources for the live window; run `28561585744` deployed the #254 Lambda package; run `28574501920` applied the #275 cost pause. | Inspect the deploy run after every merge or Environment tfvars change. |
+| Terraform apply | 완료 | Latest `backend-dev-deploy` run `28741696267` succeeded on BE `be31b32` after #302. Earlier runs `28730540713`, `28731075489`, and `28731527860` deployed #300/#301 AgentCore and Bedrock changes. | Inspect the deploy run after every merge or Environment tfvars change. |
 | API Gateway and Lambda API | 완료 | `GET /v1/health` returned `status=ok`, `service=stockbrief-api`, `environment=dev`. | Continue using deployed smoke before release or after resume. |
-| Recommendation API | 완료 | `GET /v1/recommendations/candidates?limit=3` returned `count=3`, first ticker `005930`, evidence level `medium`, evidence count `42`. | Re-run deployed API smoke after recommendation, ingestion, or Lambda deploy changes. |
-| Recommendation quality | 완료 | `scripts/check_recommendation_quality_smoke.py --limit 5 --max-detail-tickers 3 --expected-ticker 005930 --expected-ticker 207940 --expected-ticker 000660` returned `ok=true`; selected tickers `005930`, `207940`, `000660`; each detail returned 8 score components with weight sum `100`; blockers `[]`. | Re-run before product-flow work that changes candidate quality or evidence joins. |
+| Recommendation API | 완료 | On 2026-07-05 the first post-#302 smoke found `count=0`. Running `seed_stock_universe` and `refresh_score_snapshots` for `005930`, `207940`, and `000660` restored score snapshots without external provider calls. Follow-up `GET /v1/recommendations/candidates?limit=3` returned `count=2`, first ticker `000660`, and included `005930`. | Re-run deployed API smoke after recommendation, ingestion, score materializer, or Lambda deploy changes. |
+| Recommendation quality | 완료 | `scripts/check_recommendation_quality_smoke.py --limit 5 --max-detail-tickers 3 --expected-ticker 005930 --expected-ticker 000660` returned `ok=true`; selected tickers `005930`, `000660`; each detail returned 8 score components with weight sum `100`; `risk_tags` arrays were present and empty; blockers `[]`. | Re-run before product-flow work that changes candidate quality or evidence joins. |
 | Cognito | 완료 | Terraform outputs include user pool `ap-northeast-2_VPOccT5rI`, issuer, app client, and Hosted UI domain; BE #225 verified the full protected API smoke, and BE #292 verified the full protected API plus watchlist write-cycle with a temporary Cognito smoke user. | Re-run full hosted auth smoke after Cognito, callback, account API, or Amplify domain changes. |
 | Amplify hosted pages | 완료 | Page-only hosted smoke for `/`, `/account`, and `/auth/callback` returned HTTP 200 at `https://main.d20hgo2k8atldu.amplifyapp.com`. | Re-run hosted page smoke after FE deploy or Amplify config changes. |
 | FE live evidence visibility | 완료 | FE hosted evidence/watchlist/auth/search-page smoke returned `ok=true` with `/`, `/stocks/005930`, `/search?q=삼성전자`, `/watchlist`, `/account`, and `/auth/callback` all HTTP 200 and no missing page markers. | Re-run after FE detail/recommendation/search/watchlist/account UI, auth callback, API base, or Amplify deploy changes. |
 | RDS | 완료 | `stockbrief-dev-postgres` is available, PostgreSQL `16.13`, deletion protection `false`, backup retention `1`. | Stop RDS during inactive cost windows per `DEPLOYMENT_BOOTSTRAP.md`. |
 | RDS Proxy | 완료 | Terraform output `rds_proxy_endpoint` is empty and `enable_rds_proxy=false`. | Keep disabled until Lambda concurrency requires pooling. |
-| Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true`, model `apac.amazon.nova-micro-v1:0`, `matched_terms=[]`. | Keep AgentCore Runtime out of this phase. |
-| Deployed chat explanation | 완료 | `POST /v1/chat` returned `success=true`, answer present, `data.safety.policy_action=ALLOW`, `data.citations` count `2`. | Re-run after Lambda, IAM, or Bedrock config changes. |
-| Live ingestion readiness | 완료 | Post-#254 `scripts/check_ingestion_smoke.py` returned `ok=true`, `ready_for_manual_ingestion=true`, `scheduler_enable_ready=true`, blockers `[]`. | Manual provider ingest is not re-run in this audit to avoid unnecessary provider calls. |
+| Bedrock direct provider | 완료 | `scripts/check_bedrock_chat_smoke.py` returned `ok=true` for `apac.amazon.nova-micro-v1:0` and `apac.anthropic.claude-3-5-sonnet-20241022-v2:0`; both returned `matched_terms=[]`. | Keep AgentCore Runtime optional until a runtime need is proven beyond direct Bedrock. |
+| Deployed chat explanation | 완료 | `scripts/check_deployed_chat_smoke.py` returned `ok=true`; allowed explanation returned `policy_action=ALLOW`, redirected advice request returned `policy_action=REDIRECT`, both had citation count `4`, disclaimer present, and `matched_terms=[]`. | Re-run after Lambda, IAM, Bedrock, AgentCore, or recommendation candidate gate changes. |
+| Live ingestion readiness | 조건부 | `get_ingestion_status` returned `started=0`, `succeeded=10`, `failed=0`, latest evidence count `10`; raw archive write passed. Full readiness is currently blocked because `KRX_API_KEY` is missing and provider egress timed out while NAT is disabled. | Keep scheduler disabled. For the next live provider window, add reviewed KRX credential if KRX is in scope and enable NAT through reviewed `TFVARS_JSON` before provider egress or scheduler gate checks. |
 | Ingestion scheduler | 완료 | After #275, `aws scheduler list-schedules --name-prefix stockbrief-dev-provider-ingestion` returned an empty list. | Keep disabled until the next reviewed live provider ingestion window. |
 | Ingestion ledger and evidence | 완료 | Status snapshot showed `started=0`, `succeeded=10`, `failed=0`, latest evidence count `10`. | Investigate only if future runs show stale `started` rows or failures. |
 | DLQ | 완료 | SQS attributes showed visible `0`, not-visible `0`, delayed `0`. | Check after every scheduler or manual ingestion smoke. |
 | NAT and scheduler cost state | 완료 | GitHub Environment `dev` has `enable_lambda_nat_egress=false` and `enable_ingestion_scheduler=false`; NAT Gateway `nat-06de3faa3d9831ce4` is `deleted`; EIP allocation `eipalloc-099e616e0e7f6d2a1` is not found; scheduler jobs are absent. | Re-enable only through a reviewed live ingestion window. |
-| AgentCore Runtime | 완료 | `agentcore_runtime_enabled=false`; Terraform outputs for AgentCore runtime ARN and endpoint are empty. | Keep disabled until direct Bedrock is stable and a runtime need is proven. |
+| AgentCore Runtime | 완료 | `agentcore_runtime_enabled=false`; Terraform outputs for runtime ARN/ID/role are empty, while `agentcore_runtime_endpoint_name` resolves to the deterministic default `stockbrief_dev_default`. | Keep disabled until direct Bedrock is stable and a runtime need is proven. |
 
 ## Redacted Smoke Evidence
 
@@ -54,7 +54,21 @@ Run these from the BE repository root unless noted otherwise.
 
 ### Deployment Evidence
 
-BE #252 and #254 are the current deployment boundary:
+BE #300, #301, and #302 are the current deployed BE main boundary:
+
+- `backend-dev-deploy` run `28730540713` on commit `e5d40f3`
+  - Deployed BE #300 AgentCore Claude Bedrock profile preparation.
+  - The run completed successfully after the runtime metadata model ID fallback
+    fix was merged into the PR.
+- `backend-dev-deploy` run `28731527860` on commit `22ed8b1`
+  - Deployed BE #301 AgentCore invoke and citation guard preservation.
+  - `backend-ci` for the same commit also completed successfully.
+- `backend-dev-deploy` run `28741696267` on commit `be31b32`
+  - Deployed BE #302 recommendation candidate list gate and chat answer display
+    normalization recovery.
+  - This is the latest deployed BE main evidence for the 2026-07-05 audit.
+
+Earlier live ingestion and cost-pause deployment evidence:
 
 - `backend-dev-deploy` run `28560982229` on commit `88bfb21`
   - `Plan: 11 to add, 1 to change, 1 to destroy`
@@ -87,13 +101,24 @@ curl -fsS -X POST "$API_BASE_URL/v1/chat" \
   --data '{"ticker":"005930","message":"왜 추천됐나요?"}'
 ```
 
-Evidence captured on 2026-07-02:
+Evidence captured on 2026-07-05 after BE #302 deployed:
 
 - `/v1/health`: `status=ok`, `service=stockbrief-api`, `environment=dev`
-- `/v1/recommendations/candidates?limit=3`: `count=3`, first ticker `005930`,
-  first evidence level `medium`, first evidence count `42`
-- `/v1/chat`: `success=true`, answer present, `data.safety.policy_action=ALLOW`,
-  `data.citations` count `2`
+- First post-#302 `/v1/recommendations/candidates?limit=3` smoke returned
+  `count=0`, which made `/v1/chat` return `STOCK_NOT_FOUND` for `005930`.
+- The dev data was restored without external provider calls:
+  - `seed_stock_universe` for `005930`, `207940`, and `000660`: `ok=true`,
+    `stocks=3`, `identifiers=6`, unknown tickers `[]`.
+  - `refresh_score_snapshots` for the same tickers with `source_date=2026-07-05`:
+    `ok=true`, provider status `stale`, processed `3`, created `3`, reasons
+    `9`, provider freshness annotated `3`.
+- Follow-up `/v1/recommendations/candidates?limit=3`: `count=2`, first ticker
+  `000660`, listed tickers included `000660` and `005930`.
+- Follow-up deployed `POST /v1/chat` smoke passed through
+  `scripts/check_deployed_chat_smoke.py`: allowed explanation returned
+  `policy_action=ALLOW`; advice-like prompt returned `policy_action=REDIRECT`;
+  both responses had citation count `4`, disclaimer present, and
+  `matched_terms=[]`.
 
 Do not paste the full chat answer into PRs. The deployed smoke should summarize
 only response status, citation count, and safety policy fields.
@@ -105,14 +130,20 @@ AWS_PROFILE=stockbrief-dev \
 uv run python scripts/check_bedrock_chat_smoke.py \
   --model-id apac.amazon.nova-micro-v1:0 \
   --region ap-northeast-2
+
+AWS_PROFILE=stockbrief-dev \
+uv run python scripts/check_bedrock_chat_smoke.py \
+  --model-id apac.anthropic.claude-3-5-sonnet-20241022-v2:0 \
+  --region ap-northeast-2
 ```
 
-Evidence captured on 2026-07-02:
+Evidence captured on 2026-07-05:
 
-- `ok=true`
-- `model_id=apac.amazon.nova-micro-v1:0`
-- `answer_sha256_prefix=a61995047cfd`
-- `matched_terms=[]`
+- Nova direct smoke: `ok=true`, model `apac.amazon.nova-micro-v1:0`,
+  answer hash prefix `246e9a43b265`, `matched_terms=[]`.
+- Claude direct smoke: `ok=true`, model
+  `apac.anthropic.claude-3-5-sonnet-20241022-v2:0`, answer hash prefix
+  `ef071a9324d2`, `matched_terms=[]`.
 
 The helper intentionally hashes the answer and does not print the raw model
 text.
@@ -123,39 +154,37 @@ text.
 AWS_PROFILE=stockbrief-dev \
 uv run python scripts/check_ingestion_smoke.py \
   --function-name stockbrief-dev-api \
-  --providers OpenDART NAVER_NEWS \
+  --providers OpenDART NAVER_NEWS KRX \
   --tickers 005930 \
   --status-limit 10
 ```
 
-Evidence captured after BE #254 deployed on 2026-07-02:
+Evidence captured on 2026-07-05 after BE #302 deployed:
 
-- `ok=true`
-- `ready_for_manual_ingestion=true`
-- `scheduler_enable_ready=true`
-- `blockers=[]`
-- `observations=[]`
-- readiness is scoped to selected providers:
-  - OpenDART configured
-  - NAVER_NEWS client ID and secret configured
-  - KRX is not treated as a blocker for the OpenDART/NAVER scheduler gate
-- provider egress reachable:
-  - OpenDART endpoint returned HTTP 200
-  - NAVER_NEWS endpoint returned HTTP 400, which still confirms endpoint
-    reachability for the unauthenticated egress probe
+- `ok=false`
+- `ready_for_manual_ingestion=false`
+- `scheduler_enable_ready=false`
+- blockers:
+  - `missing_provider_credential`, field `KRX_API_KEY`
+  - `provider_egress` `ReadTimeoutError`
+- observations:
+  - `scheduler_gate` `ReadTimeoutError`
+- readiness details:
+  - raw archive is configured and write verification passed
+  - OpenDART and NAVER_NEWS credentials are configured
+  - KRX endpoints are configured, but `KRX_API_KEY` is missing
+  - provider egress timed out while NAT is disabled
 - status summary:
   - `started=0`
   - `succeeded=10`
   - `partial_failed=0`
   - `failed=0`
   - latest evidence count `10`
-- stale run dry-run:
-  - `stale_count=0`
-  - `updated_count=0`
 
-This audit did not run `--run-provider-ingest`; it verified readiness, current
-ledger state, egress, raw archive write, and scheduler gate without creating a
-new provider data run.
+This audit did not run `--run-provider-ingest`; full provider ingestion remains
+blocked until the next reviewed live provider window enables NAT and either
+adds a reviewed KRX credential or scopes the smoke to providers with complete
+credentials.
 
 ### DLQ, NAT, And Scheduler Checks
 
@@ -184,7 +213,7 @@ aws ec2 describe-addresses \
   --allocation-ids eipalloc-099e616e0e7f6d2a1
 ```
 
-Evidence captured on 2026-07-02:
+Evidence captured on 2026-07-05:
 
 - DLQ visible messages: `0`
 - DLQ not-visible messages: `0`
@@ -197,7 +226,7 @@ Evidence captured on 2026-07-02:
 
 ### Recommendation Quality Smoke
 
-The 2026-07-03 additional ticker smoke used this command:
+The 2026-07-05 post-#302 smoke used this command:
 
 ```bash
 STOCKBRIEF_API_BASE_URL="https://hazfha7995.execute-api.ap-northeast-2.amazonaws.com" \
@@ -205,25 +234,22 @@ uv run python scripts/check_recommendation_quality_smoke.py \
   --limit 5 \
   --max-detail-tickers 3 \
   --expected-ticker 005930 \
-  --expected-ticker 207940 \
   --expected-ticker 000660
 ```
 
-Evidence captured on 2026-07-03:
+Evidence captured on 2026-07-05:
 
 - `ok=true`
-- candidate list: target `/recommendations/candidates?limit=5`, count `5`,
-  first ticker `005930`, expected tickers `005930`, `207940`, `000660`,
-  missing expected tickers `[]`, selected tickers `005930`, `207940`,
-  `000660`, as-of `2026-06-09`
+- candidate list: target `/recommendations/candidates?limit=5`, count `2`,
+  first ticker `000660`, expected tickers `005930`, `000660`, missing expected
+  tickers `[]`, selected tickers `005930`, `000660`, as-of `2026-07-05`
 - candidate detail: targets `/recommendations/candidates/{ticker}`, evidence
-  level `medium`, evidence counts `42`, `2`, and `22`, risk tag count `1`,
-  missing data count `0`, reason count `1`
+  level `medium`, evidence counts `40` and `20`, risk tag count `0`, missing
+  data count `2`, reason count `3`
 - score components: all selected details returned component count `8` and
   component weight sum `100`
 - stock evidence: targets `/stocks/{ticker}/evidence`; source metadata coverage
-  passed for selected tickers, including internal `SCORE` evidence metadata for
-  `207940`
+  passed for selected tickers with provider `NEWS` evidence
 - `blockers=[]`
 
 ### Hosted Auth Smoke
@@ -340,8 +366,8 @@ Current deploy behavior:
   - `enable_lambda_nat_egress=false`
   - `enable_ingestion_scheduler=false`
   - OpenDART and NAVER_NEWS scheduler jobs for ticker `005930`
-- `backend-dev-deploy` run `28574501920` applied the current cost-pause state
-  successfully.
+- `backend-dev-deploy` run `28741696267` applied the latest BE #302 package
+  successfully. The deploy profile still keeps NAT and scheduler disabled.
 
 Terraform drift classification is now tied to the deploy profile source being
 reviewed first. The GitHub Environment tfvars are the reviewed deploy input, not
@@ -373,11 +399,11 @@ NAT/scheduler cost posture decided in #214 still applies as the default rule:
 
 ## Cost And Resume Decision
 
-Current cost-sensitive state after #275:
+Current cost-sensitive state on 2026-07-05:
 
 - RDS is running and available.
-- NAT Gateway `nat-06de3faa3d9831ce4` is deleted.
-- Elastic IP allocation `eipalloc-099e616e0e7f6d2a1` is released.
+- NAT Gateway `nat-06de3faa3d9831ce4` remains deleted.
+- Elastic IP allocation `eipalloc-099e616e0e7f6d2a1` remains released.
 - EventBridge Scheduler jobs for OpenDART and NAVER_NEWS are absent.
 - RDS Proxy is disabled.
 - AgentCore Runtime is disabled.
@@ -403,21 +429,29 @@ the current dev baseline:
    short-lived-token smoke.
 4. BE #252 fixed deploy profile source-of-truth handling and deployed NAT plus
    scheduler from GitHub Environment tfvars.
-5. BE #254 fixed provider-scoped ingestion scheduler readiness and the
-   post-deploy smoke returned `scheduler_enable_ready=true`.
+5. BE #254 fixed provider-scoped ingestion scheduler readiness. The 2026-07-05
+   re-check shows the historical ingestion ledger is healthy, but full provider
+   readiness is currently gated by NAT egress and `KRX_API_KEY` if KRX is in
+   scope.
 6. FE #110 merged the recommendation candidate contract cleanup without changing
    runtime API behavior.
-7. Recommendation quality with expected tickers `005930`, `207940`, and
-   `000660` returned `ok=true` on 2026-07-03; hosted page auth smoke returned
-   `ok=true` on 2026-07-02; FE hosted evidence/watchlist/auth/search-page smoke returned
-   `ok=true` after FE #118 merged on 2026-07-03.
+7. Recommendation quality with expected tickers `005930` and `000660` returned
+   `ok=true` on 2026-07-05 after dev score snapshots were restored from
+   existing data; hosted page auth smoke returned `ok=true` on 2026-07-02; FE
+   hosted evidence/watchlist/auth/search-page smoke returned `ok=true` after FE
+   #118 merged on 2026-07-03.
 8. NAT/scheduler cost posture is pause-first for the current dev baseline:
    both are disabled after BE #275, and reactivation requires a reviewed live
    provider ingestion window.
 9. BE #292 verified the current full hosted auth API smoke and watchlist
    write-cycle on 2026-07-03, then deleted the temporary Cognito smoke user and
    token file.
+10. BE #300, #301, and #302 are deployed to dev. Bedrock direct smoke passes for
+    Nova and Claude, and deployed `/v1/chat` passes both allowed explanation and
+    advice-redirection smoke scenarios.
 
 Candidate next product checks after those gates:
 
 - live evidence/watchlist visibility after future FE runtime UI changes merge
+- reviewed live provider ingestion window after NAT and KRX credential scope are
+  explicitly decided

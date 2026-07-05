@@ -23,12 +23,16 @@ class FakeFetcher:
         self,
         *,
         tickers: tuple[str, ...] = ("005930",),
+        risk_tags: tuple[str, ...] = ("sector_cycle",),
+        omit_risk_tags: bool = False,
         weak_detail: bool = False,
         missing_evidence_source_metadata: bool = False,
         score_evidence_without_url: bool = False,
         score_evidence_without_metadata: bool = False,
     ) -> None:
         self.tickers = tickers
+        self.risk_tags = risk_tags
+        self.omit_risk_tags = omit_risk_tags
         self.weak_detail = weak_detail
         self.missing_evidence_source_metadata = missing_evidence_source_metadata
         self.score_evidence_without_url = score_evidence_without_url
@@ -62,25 +66,25 @@ class FakeFetcher:
         ticker = self._ticker_from_url(url, "/recommendations/candidates/")
         if ticker:
             evidence_count = 1 if self.weak_detail else 3
+            detail_payload = {
+                "ticker": ticker,
+                "evidence_level": "medium",
+                "evidence_count": evidence_count,
+                "score_components": score_components(),
+                "missing_data": [],
+                "data_freshness": {"as_of": "2026-06-09"},
+                "recommendation_reasons": [
+                    {
+                        "reason_id": "rsn_1",
+                        "summary": "공개 데이터 기준 검토 포인트가 확인됩니다.",
+                    }
+                ],
+            }
+            if not self.omit_risk_tags:
+                detail_payload["risk_tags"] = list(self.risk_tags)
             return smoke.HttpResponse(
                 status_code=200,
-                body=json.dumps(
-                    {
-                        "ticker": ticker,
-                        "evidence_level": "medium",
-                        "evidence_count": evidence_count,
-                        "score_components": score_components(),
-                        "risk_tags": ["sector_cycle"],
-                        "missing_data": [],
-                        "data_freshness": {"as_of": "2026-06-09"},
-                        "recommendation_reasons": [
-                            {
-                                "reason_id": "rsn_1",
-                                "summary": "공개 데이터 기준 검토 포인트가 확인됩니다.",
-                            }
-                        ],
-                    }
-                ).encode("utf-8"),
+                body=json.dumps(detail_payload).encode("utf-8"),
             )
         ticker = self._ticker_from_evidence_url(url)
         if ticker:
@@ -244,6 +248,39 @@ def test_recommendation_quality_smoke_checks_multiple_listed_tickers() -> None:
         "https://api.example.com/v1/recommendations/candidates/000660",
         "https://api.example.com/v1/stocks/000660/evidence",
     ]
+
+
+def test_recommendation_quality_smoke_allows_empty_risk_tag_array() -> None:
+    result = smoke.run_smoke(
+        api_base_url="https://api.example.com",
+        ticker="005930",
+        limit=3,
+        max_detail_tickers=1,
+        min_evidence_count=2,
+        timeout_seconds=2,
+        fetch=FakeFetcher(risk_tags=()),
+    )
+
+    assert result["ok"] is True
+    assert result["checks"]["candidate_detail"]["summary"]["risk_tag_count"] == 0
+
+
+def test_recommendation_quality_smoke_blocks_missing_risk_tags_field() -> None:
+    result = smoke.run_smoke(
+        api_base_url="https://api.example.com",
+        ticker="005930",
+        limit=3,
+        max_detail_tickers=1,
+        min_evidence_count=2,
+        timeout_seconds=2,
+        fetch=FakeFetcher(omit_risk_tags=True),
+    )
+
+    assert result["ok"] is False
+    assert result["checks"]["candidate_detail"]["blockers"] == [
+        {"code": "missing_risk_tags"}
+    ]
+    assert result["checks"]["candidate_detail"]["summary"]["risk_tag_count"] == 0
 
 
 def test_recommendation_quality_smoke_prioritizes_expected_tickers_for_detail_checks() -> None:

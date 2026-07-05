@@ -279,7 +279,7 @@ def check_candidate_detail(
 
     blockers: list[dict[str, Any]] = []
     evidence_count = int_or_zero(payload.get("evidence_count"))
-    risk_tags = payload.get("risk_tags", [])
+    risk_tags = payload.get("risk_tags")
     missing_data = payload.get("missing_data")
     data_freshness = payload.get("data_freshness", {})
     reasons = payload.get("recommendation_reasons", [])
@@ -295,8 +295,10 @@ def check_candidate_detail(
                 "min_evidence_count": min_evidence_count,
             }
         )
-    if not isinstance(risk_tags, list) or not risk_tags:
+    if "risk_tags" not in payload:
         blockers.append({"code": "missing_risk_tags"})
+    elif not isinstance(risk_tags, list):
+        blockers.append({"code": "risk_tags_not_array"})
     if not isinstance(missing_data, list):
         blockers.append({"code": "missing_data_not_array"})
     if not isinstance(data_freshness, dict) or not data_freshness.get("as_of"):

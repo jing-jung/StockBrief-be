@@ -80,7 +80,8 @@ account data.
 | `candidate_evidence_below_minimum` | A list item has fewer than two evidence records. | Check ingestion status and evidence joins. |
 | `missing_candidate_latest_at` | Candidate summary has no latest evidence timestamp. | Check `evidence_summary` aggregation. |
 | `detail_evidence_below_minimum` | Detail has too little evidence. | Check `recommendation_scores.evidence_count`. |
-| `missing_risk_tags` | Detail has no risk context. | Check `risk_signals` for the ticker. |
+| `missing_risk_tags` | Detail omitted the required `risk_tags` field. | Check API response model, serializer, and `risk_signals` join. |
+| `risk_tags_not_array` | Detail contract no longer returns `risk_tags` as an array. | Check API response model and serializer. |
 | `missing_data_not_array` | Detail contract no longer returns `missing_data` as an array. | Check API response model and serializer. |
 | `missing_data_freshness_as_of` | Detail has no basis date. | Check score freshness fields. |
 | `missing_recommendation_reasons` | Detail cannot explain why the candidate appears. | Check reason generation and evidence linkage. |
