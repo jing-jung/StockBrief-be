@@ -896,6 +896,46 @@ def test_chat_closes_read_session_before_provider_io(
     assert response.status_code == 200
 
 
+def test_chat_normalizes_markdown_links_before_return(
+    seeded_api_client: TestClient,
+    monkeypatch,
+) -> None:
+    class MarkdownProvider:
+        name = "mock"
+
+        def compose(self, request):
+            baseline = compose_chat_answer(
+                message=request.message,
+                candidate=request.candidate,
+                evidence=request.evidence,
+            )
+            evidence_id = baseline.used_evidence_ids[0]
+            return baseline.model_copy(
+                update={
+                    "answer": (
+                        f"1. **재무 안정성** [{evidence_id}](https://example.com/news?ref=naver)\n"
+                        "https://example.com/raw"
+                    )
+                }
+            )
+
+    monkeypatch.setattr(
+        "app.routes.chat.chat_provider_for",
+        lambda *args, **kwargs: MarkdownProvider(),
+    )
+
+    response = seeded_api_client.post(
+        "/v1/chat",
+        json={"ticker": "005930", "message": "왜 추천됐나요?"},
+    )
+
+    assert response.status_code == 200
+    answer = response.json()["data"]["answer"]
+    assert "**" not in answer
+    assert "https://" not in answer
+    assert "[ev_" in answer
+
+
 def test_chat_provider_factory_failure_returns_fail_closed_response(
     seeded_api_client: TestClient,
     monkeypatch,

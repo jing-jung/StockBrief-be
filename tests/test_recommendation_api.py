@@ -157,6 +157,52 @@ def test_recommendation_candidates_bulk_loads_related_data(
     assert len(statements) <= 5
 
 
+def test_recommendation_candidates_hydrates_only_limited_rows(
+    seeded_api_client: TestClient,
+    monkeypatch,
+) -> None:
+    import app.services.candidate_service as candidate_module
+
+    original = candidate_module._candidate_response_from_loaded
+    loaded_tickers: list[str] = []
+
+    def wrapped_response_from_loaded(**kwargs: Any) -> Any:
+        loaded_tickers.append(kwargs["stock"].ticker)
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        candidate_module,
+        "_candidate_response_from_loaded",
+        wrapped_response_from_loaded,
+    )
+
+    response = seeded_api_client.get(
+        "/v1/recommendations/candidates",
+        params={"limit": 3},
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 3
+    assert len(loaded_tickers) == 3
+
+
+def test_list_recommendation_candidates_does_not_require_risk_signal(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    seeded_session.execute(delete(RiskSignal).where(RiskSignal.ticker == "005930"))
+    seeded_session.commit()
+
+    response = seeded_api_client.get(
+        "/v1/recommendations/candidates",
+        params={"limit": 100},
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert any(item["ticker"] == "005930" for item in items)
+
+
 def test_list_recommendation_candidates_filters_and_limits(
     seeded_api_client: TestClient,
 ) -> None:

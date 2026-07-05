@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.models import (
@@ -29,6 +30,9 @@ TRADE_DECISION_TERMS = (  # policy-scan: allow prohibited-input-guard
 TARGET_PRICE_TERMS = ("목표가", "target price", "가격 목표")  # policy-scan: allow prohibited-input-guard
 ENTRY_STOP_TERMS = ("진입가", "손절가", "entry", "stop loss", "stop-loss")  # policy-scan: allow prohibited-input-guard
 CERTAINTY_TERMS = ("수익 보장", "보장", "확실", "무조건", "guaranteed", "guarantee", "certain")  # policy-scan: allow prohibited-input-guard
+MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(https?://[^)\s]+\)")
+MARKDOWN_BOLD_PATTERN = re.compile(r"\*\*([^*\n]+)\*\*")
+BARE_URL_PATTERN = re.compile(r"<?https?://\S+>?")
 
 
 def compose_chat_answer(
@@ -93,6 +97,14 @@ def evaluate_policy(message: str) -> PolicyDecision:
     if _contains_any(normalized, ENTRY_STOP_TERMS):
         return PolicyDecision(status="redirected", category="entry_or_risk_price")
     return PolicyDecision(status="allowed")
+
+
+def normalize_chat_answer(answer: str) -> str:
+    normalized = MARKDOWN_LINK_PATTERN.sub(r"[\1]", answer)
+    normalized = MARKDOWN_BOLD_PATTERN.sub(r"\1", normalized)
+    normalized = BARE_URL_PATTERN.sub("", normalized)
+    lines = [line.rstrip() for line in normalized.splitlines()]
+    return "\n".join(lines).strip()
 
 
 def _contains_any(value: str, terms: tuple[str, ...]) -> bool:

@@ -67,8 +67,17 @@ class CandidateService:
             sector=sector,
             score_version=score_version,
         )
+        risk_counts = (
+            {}
+            if risk_profile == "aggressive"
+            else self._candidate_risk_counts(rows)
+        )
+        rows = _sort_candidate_rows(
+            rows=rows,
+            risk_profile=risk_profile,
+            risk_counts=risk_counts,
+        )[:limit]
         candidates = self._candidate_responses(rows)
-        candidates = _sort_candidates(candidates, risk_profile)[:limit]
         return RecommendationCandidateListResponse(
             items=candidates,
             count=len(candidates),
@@ -395,11 +404,10 @@ class CandidateService:
             statement = statement.where(Stock.sector == sector)
 
         rows = self.session.execute(statement).all()
-        risk_pairs = self._candidate_risk_pairs(rows)
         return [
             (stock, score)
             for stock, score in rows
-            if _passes_evidence_gate(stock, score, risk_pairs)
+            if _passes_evidence_gate(score)
         ]
 
     def _selected_scores_subquery(self, score_version: str | None):
@@ -551,22 +559,6 @@ class CandidateService:
             for ticker, summary in summaries.items()
         }
 
-    def _candidate_risk_pairs(
-        self,
-        rows: list[tuple[Stock, RecommendationScore]],
-    ) -> set[tuple[str, date]]:
-        if not rows:
-            return set()
-        tickers = [stock.ticker for stock, _ in rows]
-        as_of_dates = [score.as_of_date for _, score in rows]
-        risks = self.session.execute(
-            select(RiskSignal.ticker, RiskSignal.as_of_date).where(
-                RiskSignal.ticker.in_(tickers),
-                RiskSignal.as_of_date.in_(as_of_dates),
-            )
-        ).all()
-        return {(ticker, as_of_date) for ticker, as_of_date in risks}
-
     def _candidate_risk_counts(
         self,
         rows: list[tuple[Stock, RecommendationScore]],
@@ -699,33 +691,40 @@ def _sort_stock_candidate_contract_items(
     )
 
 
-def _sort_candidates(
-    candidates: list[RecommendationCandidateResponse],
+def _sort_candidate_rows(
+    *,
+    rows: list[tuple[Stock, RecommendationScore]],
     risk_profile: RiskProfile,
-) -> list[RecommendationCandidateResponse]:
+    risk_counts: dict[tuple[str, date], int],
+) -> list[tuple[Stock, RecommendationScore]]:
     if risk_profile == "conservative":
-        return sorted(candidates, key=lambda item: (len(item.risk_tags), -item.recommendation_score))
+        return sorted(
+            rows,
+            key=lambda row: (
+                risk_counts.get((row[0].ticker, row[1].as_of_date), 0),
+                -row[1].total_score,
+            ),
+        )
     if risk_profile == "aggressive":
-        return sorted(candidates, key=lambda item: item.recommendation_score, reverse=True)
+        return sorted(rows, key=lambda row: row[1].total_score, reverse=True)
     return sorted(
-        candidates,
-        key=lambda item: item.recommendation_score - len(item.risk_tags) * 0.5,
+        rows,
+        key=lambda row: (
+            row[1].total_score
+            - risk_counts.get((row[0].ticker, row[1].as_of_date), 0) * Decimal("0.5")
+        ),
         reverse=True,
     )
 
 
-def _passes_evidence_gate(
-    stock: Stock,
-    score: RecommendationScore,
-    risk_signals: set[tuple[str, date]],
-) -> bool:
+def _passes_evidence_gate(score: RecommendationScore) -> bool:
     if score.evidence_count < 2:
         return False
     if not isinstance(score.missing_data, list):
         return False
     if not isinstance(score.data_freshness, dict) or not score.data_freshness.get("as_of"):
         return False
-    return (stock.ticker, score.as_of_date) in risk_signals
+    return True
 
 
 def _score_components(components: list[dict[str, object]]) -> list[ScoreComponentResponse]:
