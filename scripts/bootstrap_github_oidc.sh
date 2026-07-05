@@ -407,7 +407,10 @@ cat >"${tmpdir}/deploy-policy.json" <<POLICY
         "ssm:GetParametersByPath",
         "ssm:PutParameter"
       ],
-      "Resource": "arn:aws:ssm:${region}:${account_id}:parameter/stockbrief/${environment}/agentcore/*"
+      "Resource": [
+        "arn:aws:ssm:${region}:${account_id}:parameter/stockbrief/${environment}/agentcore",
+        "arn:aws:ssm:${region}:${account_id}:parameter/stockbrief/${environment}/agentcore/*"
+      ]
     },
     {
       "Sid": "DeployAgentCoreImageRead",

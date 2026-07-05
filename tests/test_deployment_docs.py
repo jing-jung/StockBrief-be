@@ -1021,6 +1021,10 @@ def test_github_deploy_role_policy_scopes_prefix_named_resources() -> None:
         "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres",
         "arn:aws:logs:${region}:${account_id}:log-group:/aws/rds/${resource_name_prefix}-postgres:*",
     }
+    assert _statement_resources(deploy_policy, "DeployAgentCoreMetadata") == {
+        "arn:aws:ssm:${region}:${account_id}:parameter/stockbrief/${environment}/agentcore",
+        "arn:aws:ssm:${region}:${account_id}:parameter/stockbrief/${environment}/agentcore/*",
+    }
     assert _statement_resources(deploy_policy, "DeploySecretsByPrefix") == {
         "arn:aws:secretsmanager:${region}:${account_id}:secret:${resource_name_prefix}/*"
     }
