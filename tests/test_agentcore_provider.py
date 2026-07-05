@@ -95,7 +95,7 @@ def test_agentcore_provider_rechecks_runtime_answer(
     response = provider.compose(request)
 
     assert response.answer.endswith(f"[{evidence_id}]")
-    assert response.citations == baseline.citations
+    assert [citation.evidence_id for citation in response.citations] == [evidence_id]
     assert response.policy_status == "allowed"
     assert {item["id"] for item in captured_payload["input"]["evidence"]} <= set(
         baseline.used_evidence_ids
@@ -129,7 +129,7 @@ def test_agentcore_provider_ignores_non_evidence_bracket_labels(
     assert response.answer.endswith(f"[{evidence_id}]")
 
 
-def test_agentcore_provider_blocks_context_citation_not_returned_to_client(
+def test_agentcore_provider_returns_context_citation_from_evidence_tool(
     seeded_session: Session,
 ) -> None:
     request = _provider_input(seeded_session)
@@ -138,9 +138,14 @@ def test_agentcore_provider_blocks_context_citation_not_returned_to_client(
         candidate=request.candidate,
         evidence=request.evidence,
     )
-    returned_ids = set(baseline.used_evidence_ids)
-    extra_evidence_id = next(
-        item.id for item in request.evidence if item.id not in returned_ids
+    extra_evidence_id = "ev_provider_005930_tool_extra"
+    extra_evidence = request.evidence[0].model_copy(
+        update={"id": extra_evidence_id, "title": "AgentCore tool 추가 근거"}
+    )
+    request = ChatProviderInput(
+        message=request.message,
+        candidate=request.candidate,
+        evidence=[*request.evidence, extra_evidence],
     )
     provider = AgentCoreChatProvider(
         runtime_url="http://runtime.local",
@@ -156,8 +161,11 @@ def test_agentcore_provider_blocks_context_citation_not_returned_to_client(
         },
     )
 
-    with pytest.raises(ChatProviderUnavailable, match="invalid citations"):
-        provider.compose(request)
+    response = provider.compose(request)
+
+    assert response.answer.endswith(f"[{extra_evidence_id}]")
+    assert [citation.evidence_id for citation in response.citations] == [extra_evidence_id]
+    assert response.used_evidence_ids == [extra_evidence_id]
 
 
 def test_agentcore_provider_blocks_unsafe_runtime_answer(

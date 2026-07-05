@@ -33,6 +33,10 @@ CERTAINTY_TERMS = ("수익 보장", "보장", "확실", "무조건", "guaranteed
 MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\(https?://[^)\s]+\)")
 MARKDOWN_BOLD_PATTERN = re.compile(r"\*\*([^*\n]+)\*\*")
 BARE_URL_PATTERN = re.compile(r"<?https?://\S+>?")
+REFERENCE_BRACKET_PATTERN = re.compile(
+    r"\[[^\]]*(?:ev_[A-Za-z0-9_.:-]+|rsn_[A-Za-z0-9_.:-]+)[^\]]*\]"
+)
+EVIDENCE_LABEL_PATTERN = re.compile(r"\[(?:증거 요약|근거 요약)\]")
 
 
 def compose_chat_answer(
@@ -101,9 +105,11 @@ def evaluate_policy(message: str) -> PolicyDecision:
 
 def normalize_chat_answer(answer: str) -> str:
     normalized = MARKDOWN_LINK_PATTERN.sub(r"[\1]", answer)
+    normalized = REFERENCE_BRACKET_PATTERN.sub("", normalized)
+    normalized = EVIDENCE_LABEL_PATTERN.sub("", normalized)
     normalized = MARKDOWN_BOLD_PATTERN.sub(r"\1", normalized)
     normalized = BARE_URL_PATTERN.sub("", normalized)
-    lines = [line.rstrip() for line in normalized.splitlines()]
+    lines = [re.sub(r"[ \t]{2,}", " ", line).rstrip() for line in normalized.splitlines()]
     return "\n".join(lines).strip()
 
 

@@ -17,12 +17,13 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import Settings
-from app.models import ChatResponse
+from app.models import ChatCitation, ChatResponse
 from app.services.chat.composer import compose_chat_answer
 from app.services.chat.providers import (
     ChatProviderInput,
     ChatProviderUnavailable,
     OutputGuardResult,
+    _cited_evidence_ids,
     _elapsed_ms,
     _evaluate_prohibited_output,
     _extract_bedrock_text,
@@ -120,9 +121,14 @@ class AgentCoreChatProvider:
                 "AgentCore chat provider returned an unsafe answer."
             )
         try:
+            answer_citations = _agentcore_answer_citations(
+                answer=answer,
+                evidence=request.evidence,
+                fallback=baseline.citations,
+            )
             _validate_answer_citations(
                 answer=answer,
-                allowed_evidence_ids=set(baseline.used_evidence_ids),
+                allowed_evidence_ids={citation.evidence_id for citation in answer_citations},
             )
         except ChatProviderUnavailable as exc:
             _log_agentcore_guard_failure(
@@ -146,9 +152,9 @@ class AgentCoreChatProvider:
         )
         return ChatResponse(
             answer=answer,
-            citations=baseline.citations,
+            citations=answer_citations,
             policy_status=baseline.policy_status,
-            used_evidence_ids=baseline.used_evidence_ids,
+            used_evidence_ids=[citation.evidence_id for citation in answer_citations],
         )
 
     def _validate_configuration(self, *, started_at: float) -> None:
@@ -254,6 +260,31 @@ def _agentcore_runtime_payload(
 def _agentcore_runtime_session_id(payload: dict[str, Any]) -> str:
     ticker = str(payload.get("input", {}).get("ticker", "stockbrief"))
     return f"stockbrief-{ticker}-{uuid.uuid4().hex}"
+
+
+def _agentcore_answer_citations(
+    *,
+    answer: str,
+    evidence: list[Any],
+    fallback: list[ChatCitation],
+) -> list[ChatCitation]:
+    cited_ids = _cited_evidence_ids(answer)
+    if not cited_ids:
+        return fallback
+    selected = [
+        ChatCitation(
+            evidence_id=item.id,
+            type=item.type,
+            title=item.title,
+            source_name=item.source_name,
+            source_url=item.source_url,
+            published_at=item.published_at,
+            as_of_date=item.as_of_date,
+        )
+        for item in evidence
+        if item.id in cited_ids
+    ]
+    return selected or fallback
 
 
 def _extract_agentcore_answer(response: dict[str, Any]) -> str:
