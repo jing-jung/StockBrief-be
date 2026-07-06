@@ -6,10 +6,13 @@ from sqlalchemy.orm import Session
 
 from app.orm import (
     EvidenceChunk,
+    FinancialStatement,
+    PriceMetric,
     RecommendationReason,
     RecommendationScore,
     RiskSignal,
     SourceDocument,
+    Stock,
 )
 from app.services.recommendation.engine import SCORE_VERSION
 from app.services.recommendation.materializer import materialize_recommendation_scores
@@ -175,3 +178,73 @@ def test_materializer_ignores_legacy_mock_evidence_rows(
     assert "ev_mock_005930_news" not in component_evidence
     assert "ev_mock_005930_news" not in reason_evidence
     assert "evXmock_005930_news" in component_evidence
+
+
+def test_materializer_ignores_mock_financial_and_fallback_price_rows(
+    seeded_session: Session,
+) -> None:
+    if seeded_session.get(Stock, "035900") is None:
+        seeded_session.add(
+            Stock(
+                ticker="035900",
+                company_name="JYP Ent.",
+                market="KOSDAQ",
+                is_active=True,
+            )
+        )
+    source = SourceDocument(
+        ticker="035900",
+        source_type="financial",
+        source_name="OpenDART_MOCK",
+        source_url=None,
+        external_id="mock-disclosure-035900",
+        title="mock financial source",
+        fetched_at=datetime(2026, 7, 3, tzinfo=timezone.utc),
+    )
+    seeded_session.add(source)
+    seeded_session.flush()
+    seeded_session.add(
+        FinancialStatement(
+            ticker="035900",
+            fiscal_year=2026,
+            fiscal_period="Q1",
+            period_end_date=date(2026, 3, 31),
+            revenue=Decimal("1000000000"),
+            operating_income=Decimal("500000000"),
+            net_income=Decimal("400000000"),
+            total_assets=Decimal("2000000000"),
+            total_liabilities=Decimal("500000000"),
+            total_equity=Decimal("1500000000"),
+            source_document_id=source.id,
+        )
+    )
+    seeded_session.add(
+        PriceMetric(
+            ticker="035900",
+            trade_date=date(2026, 7, 3),
+            close_price=Decimal("100"),
+            volume=Decimal("100"),
+            trading_value=Decimal("10000"),
+            market_cap=Decimal("100000"),
+            source="KRX_FALLBACK_MOCK",
+        )
+    )
+    seeded_session.commit()
+
+    materialize_recommendation_scores(
+        seeded_session,
+        as_of_date=date(2026, 7, 3),
+        tickers=["035900"],
+    )
+
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(
+            RecommendationScore.ticker == "035900",
+            RecommendationScore.as_of_date == date(2026, 7, 3),
+            RecommendationScore.score_version == SCORE_VERSION,
+        )
+    ).one()
+    assert "financial_stability.inputs" in score.missing_data
+    assert "profitability.inputs" in score.missing_data
+    assert "liquidity.inputs" in score.missing_data
+    assert score.data_freshness.get("fallback_data") == []

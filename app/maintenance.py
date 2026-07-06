@@ -14,6 +14,7 @@ from app.services.ingestion import (
     handle_ingestion_event,
     handle_refresh_score_snapshots_event,
     reconcile_stale_ingestion_runs,
+    seed_krx_stock_universe_from_event,
 )
 
 
@@ -25,6 +26,8 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         return migrate()
     if operation == "seed_stock_universe":
         return seed_stock_universe_from_event(event)
+    if operation == "seed_krx_stock_universe":
+        return seed_krx_stock_universe_from_event(event)
     if operation == "check_ingestion_readiness":
         return check_ingestion_readiness(
             providers=_provider_selection(event),
@@ -49,6 +52,7 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         "supported_operations": [
             "migrate",
             "seed_stock_universe",
+            "seed_krx_stock_universe",
             "migrate_and_seed",
             "check_ingestion_readiness",
             "check_raw_archive_write",

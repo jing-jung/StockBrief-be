@@ -27,6 +27,7 @@ def test_maintenance_rejects_unknown_operation() -> None:
     assert "check_provider_egress" in result["supported_operations"]
     assert "check_ingestion_scheduler_enable_gate" in result["supported_operations"]
     assert "seed_stock_universe" in result["supported_operations"]
+    assert "seed_krx_stock_universe" in result["supported_operations"]
     assert "seed_mock_data" not in result["supported_operations"]
     assert "seed_demo_stocks" not in result["supported_operations"]
     assert "ingest_provider_batch" in result["supported_operations"]
@@ -117,6 +118,25 @@ def test_maintenance_routes_stock_universe_seed_operation(monkeypatch) -> None:
     result = handle_maintenance_event(event)
 
     assert result == {"ok": True, "operation": "seed_stock_universe"}
+    assert calls == [event]
+
+
+def test_maintenance_routes_krx_stock_universe_seed_operation(monkeypatch) -> None:
+    calls = []
+
+    def fake_seed(event):
+        calls.append(event)
+        return {"ok": True, "operation": "seed_krx_stock_universe"}
+
+    monkeypatch.setattr("app.maintenance.seed_krx_stock_universe_from_event", fake_seed)
+
+    event = {
+        "stockbrief_operation": "seed_krx_stock_universe",
+        "markets": ["KOSPI", "KOSDAQ"],
+    }
+    result = handle_maintenance_event(event)
+
+    assert result == {"ok": True, "operation": "seed_krx_stock_universe"}
     assert calls == [event]
 
 

@@ -19,6 +19,7 @@ from app.orm import (
     PriceMetric,
     RecommendationScore,
     SourceDocument,
+    Stock,
 )
 from app.services.external.clients import KRX_PROVIDER, NAVER_PROVIDER, OPENDART_PROVIDER
 from app.services.external.types import ExternalApiResult, ExternalRequest, ExternalResponse
@@ -39,6 +40,7 @@ from app.services.ingestion import (
     summarize_ingestion_status,
     hydrate_external_api_settings,
     handle_ingestion_event,
+    persist_krx_stock_master,
     upsert_evidence_chunk,
 )
 
@@ -852,6 +854,76 @@ def test_krx_ingestion_uses_short_code_when_isu_cd_is_isin(
     assert price.source == KRX_PROVIDER
 
 
+def test_persist_krx_stock_master_upserts_market_stock_rows(
+    seeded_session: Session,
+) -> None:
+    seeded_session.query(Stock).filter(Stock.ticker == "123456").delete()
+    seeded_session.commit()
+
+    result = persist_krx_stock_master(
+        seeded_session,
+        market="KOSDAQ",
+        payload={
+            "base_date": "20260703",
+            "OutBlock_1": [
+                {
+                    "BAS_DD": "20260703",
+                    "ISU_SRT_CD": "123456",
+                    "ISU_ABBRV": "테스트바이오",
+                    "ISU_ENG_NM": "Test Bio",
+                    "MKT_NM": "KOSDAQ",
+                    "LIST_DD": "20240115",
+                    "SECUGRP_NM": "주권",
+                    "TDD_CLSPRC": "12,300",
+                    "ACC_TRDVOL": "1,000",
+                    "ACC_TRDVAL": "12,300,000",
+                    "MKTCAP": "123,000,000,000",
+                    "FLUC_RT": "2.5",
+                }
+            ]
+        },
+    )
+
+    assert result == {"inserted": 1, "updated": 0, "skipped": 0}
+    stock = seeded_session.get(Stock, "123456")
+    assert stock is not None
+    assert stock.company_name == "테스트바이오"
+    assert stock.company_name_en == "Test Bio"
+    assert stock.market == "KOSDAQ"
+    assert stock.listing_date is not None
+    assert stock.listing_date.isoformat() == "2024-01-15"
+    price = seeded_session.scalars(
+        select(PriceMetric).where(
+            PriceMetric.ticker == "123456",
+            PriceMetric.trade_date == datetime(2026, 7, 3, tzinfo=timezone.utc).date(),
+        )
+    ).one()
+    assert price.close_price == 12300
+    assert price.volume == 1000
+    assert price.source == KRX_PROVIDER
+
+    update_result = persist_krx_stock_master(
+        seeded_session,
+        market="KOSDAQ",
+        payload={
+            "base_date": "20260703",
+            "OutBlock_1": [
+                {
+                    "BAS_DD": "20260703",
+                    "ISU_CD": "123456",
+                    "ISU_NM": "테스트바이오2",
+                    "TDD_CLSPRC": "12,800",
+                }
+            ],
+        },
+    )
+
+    assert update_result == {"inserted": 0, "updated": 1, "skipped": 0}
+    assert seeded_session.get(Stock, "123456").company_name == "테스트바이오2"
+    seeded_session.refresh(price)
+    assert price.close_price == 12800
+
+
 def test_krx_ingestion_marks_partial_failed_when_no_price_rows_persist(
     monkeypatch,
     seeded_session: Session,
@@ -1020,6 +1092,47 @@ def test_refresh_score_snapshots_uses_successful_krx_tickers_and_marks_partial_f
     assert provider_freshness["status"] == "partial_failed"
     assert provider_freshness["successful_tickers"] == ["005930"]
     assert provider_freshness["failed_tickers"] == ["000660"]
+
+
+def test_refresh_score_snapshots_batches_active_market_stocks(
+    seeded_session: Session,
+) -> None:
+    for ticker, name in [("035900", "JYP Ent."), ("086520", "에코프로")]:
+        if seeded_session.get(Stock, ticker) is None:
+            seeded_session.add(
+                Stock(
+                    ticker=ticker,
+                    company_name=name,
+                    market="KOSDAQ",
+                    is_active=True,
+                )
+            )
+    seeded_session.commit()
+
+    result = ingestion_module.refresh_score_snapshots(
+        seeded_session,
+        {
+            "stockbrief_operation": "refresh_score_snapshots",
+            "source_date": "2026-07-03",
+            "markets": ["KOSDAQ"],
+            "stock_limit": 1,
+            "stock_offset": 0,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["batch"]["markets"] == ["KOSDAQ"]
+    assert result["batch"]["selected_count"] == 1
+    assert result["refresh"]["processed"] == 1
+    selected_ticker = result["successful_tickers"][0]
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(
+            RecommendationScore.ticker == selected_ticker,
+            RecommendationScore.as_of_date == datetime(2026, 7, 3, tzinfo=timezone.utc).date(),
+            RecommendationScore.score_version == SCORE_VERSION,
+        )
+    ).one()
+    assert score.total_score is not None
 
 
 def test_persist_failure_rolls_back_normalized_rows_before_marking_failed(

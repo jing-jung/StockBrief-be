@@ -84,6 +84,8 @@ class EvidenceService:
                 if row.source_document_id
                 else None
             )
+            if _is_mock_source_document(source):
+                continue
             items.append(
                 StockEvidenceItemResponse(
                     id=f"financial_{ticker}_{row.fiscal_year}_{row.fiscal_period}",
@@ -183,6 +185,7 @@ class EvidenceService:
                 data_status="fallback" if "FALLBACK" in row.source else "available",
             )
             for row in prices
+            if not _is_mock_or_fallback_provider(row.source)
         ]
 
 
@@ -294,6 +297,23 @@ def source_type_to_evidence_type(source_type: str) -> str:
     if source_type == "price":
         return "price"
     return "disclosure"
+
+
+def _is_mock_source_document(source: SourceDocument | None) -> bool:
+    if source is None:
+        return False
+    values = [
+        source.source_name,
+        source.external_id,
+        source.title,
+        str(source.metadata_ or ""),
+    ]
+    return any(_is_mock_or_fallback_provider(value) for value in values)
+
+
+def _is_mock_or_fallback_provider(value: object) -> bool:
+    normalized = str(value or "").upper()
+    return "MOCK" in normalized or "FALLBACK" in normalized
 
 
 def optional_float(value: object) -> float | None:

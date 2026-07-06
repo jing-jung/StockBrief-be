@@ -608,11 +608,122 @@ def handle_refresh_score_snapshots_event(event: dict[str, object]) -> dict[str, 
     return result
 
 
+def seed_krx_stock_universe_from_event(event: dict[str, object]) -> dict[str, Any]:
+    source_date = _compact_source_date(
+        event.get("source_date") or datetime.now(timezone.utc).date().isoformat()
+    )
+    markets = _event_markets(event)
+    with get_session_factory()() as session:
+        settings = hydrate_external_api_settings(get_settings())
+        client = KrxClient(settings=settings, session=session)
+        results = []
+        totals = {"inserted": 0, "updated": 0, "skipped": 0}
+        for market in markets:
+            result = client.daily_trading(
+                ticker="",
+                base_date=source_date,
+                market=market,
+                bypass_cache=True,
+            )
+            counts = persist_krx_stock_master(
+                session,
+                market=market,
+                payload=result.payload,
+            )
+            for key in totals:
+                totals[key] += counts[key]
+            results.append(
+                {
+                    "market": market,
+                    "data_status": result.data_status,
+                    "status_code": result.status_code,
+                    "counts": counts,
+                    "missing_data": result.missing_data,
+                }
+            )
+        session.commit()
+    return {
+        "ok": any(item["counts"]["inserted"] + item["counts"]["updated"] > 0 for item in results),
+        "operation": "seed_krx_stock_universe",
+        "source_date": source_date,
+        "markets": markets,
+        "totals": totals,
+        "results": results,
+    }
+
+
+def persist_krx_stock_master(
+    session: Session,
+    *,
+    market: str,
+    payload: dict[str, Any],
+) -> dict[str, int]:
+    counts = {"inserted": 0, "updated": 0, "skipped": 0}
+    market_key = _normalize_provider_market(market)
+    for item in _iter_dicts(payload.get("OutBlock_1")):
+        normalized = _normalize_krx_stock_item(item, market=market_key)
+        if normalized is None:
+            counts["skipped"] += 1
+            continue
+        stock = session.get(Stock, normalized["ticker"])
+        if stock is None:
+            session.add(Stock(**normalized))
+            counts["inserted"] += 1
+        else:
+            for key, value in normalized.items():
+                setattr(stock, key, value)
+            counts["updated"] += 1
+        _upsert_krx_price_metric_from_item(session, item=item, payload=payload)
+    session.flush()
+    return counts
+
+
+def _upsert_krx_price_metric_from_item(
+    session: Session,
+    *,
+    item: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    base_date = str(payload.get("base_date") or payload.get("basDd") or "").strip()
+    normalized = _normalize_krx_price_item(item, base_date=base_date)
+    if normalized is None:
+        return
+    if normalized["trade_date"] is None:
+        return
+    existing = session.scalars(
+        select(PriceMetric).where(
+            PriceMetric.ticker == normalized["ticker"],
+            PriceMetric.trade_date == normalized["trade_date"],
+        )
+    ).first()
+    if existing is None:
+        session.add(
+            PriceMetric(
+                ticker=normalized["ticker"],
+                trade_date=normalized["trade_date"],
+                close_price=normalized["close_price"],
+                volume=normalized["volume"],
+                trading_value=normalized["trading_value"],
+                market_cap=normalized["market_cap"],
+                change_rate=normalized["change_rate"],
+                source=KRX_PROVIDER,
+            )
+        )
+        return
+    existing.close_price = normalized["close_price"]
+    existing.volume = normalized["volume"]
+    existing.trading_value = normalized["trading_value"]
+    existing.market_cap = normalized["market_cap"]
+    existing.change_rate = normalized["change_rate"]
+    existing.source = KRX_PROVIDER
+
+
 def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[str, Any]:
     as_of_date = _event_as_of_date(event)
     requested_tickers = _event_tickers(event)
     ingestion_result: dict[str, Any] | None = None
     provider_statuses: dict[str, dict[str, Any]] = {}
+    batch_tickers: list[str] | None = None
 
     if event.get("provider"):
         request = ProviderIngestionRequest.from_event(event)
@@ -622,6 +733,10 @@ def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[
         target_tickers = _unique_tickers(request.tickers)
     else:
         refresh_tickers = _unique_tickers(requested_tickers)
+        if not refresh_tickers:
+            batch_tickers = _score_refresh_tickers(session, event)
+            if batch_tickers is not None:
+                refresh_tickers = batch_tickers
         target_tickers = refresh_tickers
         provider_statuses = {
             "refresh_operation": {
@@ -631,7 +746,7 @@ def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[
             }
         }
 
-    materializer_tickers = refresh_tickers or None
+    materializer_tickers = refresh_tickers if batch_tickers is not None else (refresh_tickers or None)
     if ingestion_result is not None and not refresh_tickers:
         refresh_result: dict[str, int | str] = {
             "processed": 0,
@@ -664,6 +779,7 @@ def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[
         "failed_tickers": _failed_ingestion_tickers(ingestion_result),
         "provider_status": provider_status,
         "provider_freshness": provider_statuses,
+        "batch": _score_refresh_batch_metadata(event, batch_tickers),
         "refresh": {
             **refresh_result,
             "provider_freshness_annotated": annotated,
@@ -1559,6 +1675,32 @@ def _annotate_score_provider_freshness(
     return len(scores)
 
 
+def _normalize_krx_stock_item(
+    item: dict[str, Any],
+    *,
+    market: str,
+) -> dict[str, Any] | None:
+    ticker = _ticker_from_provider(item, "ISU_SRT_CD", "isuSrtCd", "ticker", "ISU_CD", "isuCd")
+    if not ticker or not ticker.isdigit() or len(ticker) != 6:
+        return None
+    name = _first_text(item, "ISU_ABBRV", "isuAbrv", "ISU_NM", "isuNm", "name")
+    if not name:
+        return None
+    item_market = _first_text(item, "MKT_NM", "mktNm", "market") or market
+    listing_date = _parse_yyyymmdd(_first_text(item, "LIST_DD", "listDd"))
+    sector = _first_text(item, "SECT_TP_NM", "MKT_TP_NM", "secugrpNm", "SECUGRP_NM") or None
+    return {
+        "ticker": ticker,
+        "company_name": name,
+        "company_name_en": _first_text(item, "ISU_ENG_NM", "isuEngNm") or None,
+        "market": _normalize_provider_market(item_market),
+        "sector": sector,
+        "industry": _first_text(item, "IDX_IND_NM", "industry") or sector,
+        "listing_date": listing_date.date() if listing_date else None,
+        "is_active": True,
+    }
+
+
 def _normalize_krx_price_item(
     item: dict[str, Any],
     *,
@@ -1703,6 +1845,68 @@ def _event_providers(event: dict[str, object]) -> list[str]:
     return [_normalize_provider(value) for value in values]
 
 
+def _event_markets(event: dict[str, object]) -> list[str]:
+    markets_value = event.get("markets")
+    if isinstance(markets_value, str):
+        values = [item.strip() for item in markets_value.split(",") if item.strip()]
+    elif isinstance(markets_value, list):
+        values = [str(item).strip() for item in markets_value if str(item).strip()]
+    else:
+        market_value = event.get("market")
+        values = [str(market_value).strip()] if isinstance(market_value, str) and market_value.strip() else []
+    markets = [_normalize_provider_market(value) for value in values]
+    return markets or ["KOSPI", "KOSDAQ"]
+
+
+def _event_market_filter(event: dict[str, object]) -> list[str]:
+    if "markets" not in event and "market" not in event:
+        return []
+    return _event_markets(event)
+
+
+def _score_refresh_tickers(session: Session, event: dict[str, object]) -> list[str] | None:
+    has_batch_selector = any(
+        key in event
+        for key in ("stock_limit", "stock_offset", "limit", "offset", "markets", "market")
+    )
+    if not has_batch_selector:
+        return None
+    markets = _event_market_filter(event)
+    limit = _score_refresh_limit(event.get("stock_limit", event.get("limit")))
+    offset = _nonnegative_int(event.get("stock_offset", event.get("offset")), default=0)
+    statement = select(Stock.ticker).where(Stock.is_active.is_(True))
+    if markets:
+        statement = statement.where(Stock.market.in_(markets))
+    return list(
+        session.scalars(
+            statement.order_by(Stock.ticker.asc()).limit(limit).offset(offset)
+        ).all()
+    )
+
+
+def _score_refresh_batch_metadata(
+    event: dict[str, object],
+    tickers: list[str] | None,
+) -> dict[str, object] | None:
+    if tickers is None:
+        return None
+    return {
+        "limit": _score_refresh_limit(event.get("stock_limit", event.get("limit"))),
+        "offset": _nonnegative_int(event.get("stock_offset", event.get("offset")), default=0),
+        "markets": _event_market_filter(event),
+        "selected_count": len(tickers),
+        "first_ticker": tickers[0] if tickers else None,
+        "last_ticker": tickers[-1] if tickers else None,
+    }
+
+
+def _normalize_provider_market(market: str) -> str:
+    normalized = market.strip().upper()
+    if normalized in {"KOSDAQ", "KQ", "KSQ"}:
+        return "KOSDAQ"
+    return "KOSPI"
+
+
 def _event_bool(value: object, *, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -1723,6 +1927,11 @@ def _status_limit(value: object) -> int:
 def _reconcile_limit(value: object) -> int:
     limit = _positive_int(value, default=50)
     return min(limit, 100)
+
+
+def _score_refresh_limit(value: object) -> int:
+    limit = _positive_int(value, default=100)
+    return min(limit, 300)
 
 
 def _stale_run_max_age_minutes(value: object) -> int:
@@ -1848,6 +2057,14 @@ def _positive_int(value: object, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _nonnegative_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _request_limit_violations(request: ProviderIngestionRequest) -> list[dict[str, int | str]]:

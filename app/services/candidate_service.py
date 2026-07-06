@@ -164,8 +164,6 @@ class CandidateService:
             )
             .where(
                 selected_scores.c.score_rank == 1,
-                RecommendationScore.is_candidate_eligible.is_(True),
-                RecommendationScore.evidence_count >= 2,
                 RecommendationScore.missing_data.is_not(None),
                 RecommendationScore.data_freshness.is_not(None),
                 RecommendationScore.data_freshness["as_of"].as_string().is_not(None),
@@ -395,7 +393,6 @@ class CandidateService:
             .join(selected_scores, selected_scores.c.score_id == RecommendationScore.id)
             .where(
                 selected_scores.c.score_rank == 1,
-                RecommendationScore.is_candidate_eligible.is_(True),
             )
         )
         if market:
@@ -718,8 +715,6 @@ def _sort_candidate_rows(
 
 
 def _passes_evidence_gate(score: RecommendationScore) -> bool:
-    if score.evidence_count < 2:
-        return False
     if not isinstance(score.missing_data, list):
         return False
     if not isinstance(score.data_freshness, dict) or not score.data_freshness.get("as_of"):

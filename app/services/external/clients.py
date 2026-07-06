@@ -418,18 +418,20 @@ class KrxClient(BaseExternalApiClient):
         ticker: str,
         base_date: str,
         market: str = "KOSPI",
+        bypass_cache: bool = False,
     ) -> ExternalApiResult:
         market_key = _krx_market_key(market)
         endpoint = self._daily_endpoint(market_key)
         cache_key = f"daily_trading:{market_key}:{base_date}"
         fallback_cache_key = f"{cache_key}:{ticker}"
-        cached = self._from_cache(
-            provider=KRX_PROVIDER,
-            endpoint=endpoint or f"missing_krx_{market_key.lower()}_daily_url",
-            cache_key=cache_key,
-        )
-        if cached is not None:
-            return cached
+        if not bypass_cache:
+            cached = self._from_cache(
+                provider=KRX_PROVIDER,
+                endpoint=endpoint or f"missing_krx_{market_key.lower()}_daily_url",
+                cache_key=cache_key,
+            )
+            if cached is not None:
+                return cached
 
         if not endpoint:
             return self._fallback(
@@ -461,7 +463,7 @@ class KrxClient(BaseExternalApiClient):
                 url=endpoint,
                 params={"basDd": base_date},
                 headers={self.settings.krx_api_key_header: self.settings.krx_api_key},
-                timeout_seconds=self.rate_limit_policy.timeout_seconds,
+                timeout_seconds=max(self.rate_limit_policy.timeout_seconds, 24.0),
             ),
             request_params={"basDd": base_date, "market": market_key},
             fallback_payload={

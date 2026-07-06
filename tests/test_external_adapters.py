@@ -430,6 +430,57 @@ def test_krx_daily_cache_is_market_date_scoped(
     assert len(calls) == 1
 
 
+def test_krx_daily_can_bypass_cached_fallback(
+    seeded_session: Session,
+) -> None:
+    client = KrxClient(
+        settings=Settings(
+            KRX_KOSPI_DAILY_URL="https://krx.example/kospi",
+            KRX_API_KEY="krx-secret",
+        ),
+        session=seeded_session,
+        transport=lambda _request: ExternalResponse(status_code=504, payload={}),
+    )
+    fallback = client.daily_trading(ticker="", base_date="20260609", market="KOSPI")
+    assert fallback.data_status == "fallback"
+
+    calls: list[ExternalRequest] = []
+
+    def transport(request: ExternalRequest) -> ExternalResponse:
+        calls.append(request)
+        return ExternalResponse(
+            status_code=200,
+            payload={
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": "20260609",
+                        "ISU_SRT_CD": "005930",
+                        "TDD_CLSPRC": "70,000",
+                    },
+                ],
+            },
+        )
+
+    refresh_client = KrxClient(
+        settings=Settings(
+            KRX_KOSPI_DAILY_URL="https://krx.example/kospi",
+            KRX_API_KEY="krx-secret",
+        ),
+        session=seeded_session,
+        transport=transport,
+    )
+    refreshed = refresh_client.daily_trading(
+        ticker="",
+        base_date="20260609",
+        market="KOSPI",
+        bypass_cache=True,
+    )
+
+    assert refreshed.data_status == "available"
+    assert refreshed.from_cache is False
+    assert len(calls) == 1
+
+
 def test_krx_kosdaq_success_uses_market_specific_endpoint(
     seeded_session: Session,
 ) -> None:

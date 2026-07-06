@@ -60,7 +60,7 @@ def materialize_recommendation_scores(
 
 def _stocks(session: Session, tickers: list[str] | None) -> list[Stock]:
     statement = select(Stock).where(Stock.is_active.is_(True)).order_by(Stock.ticker.asc())
-    if tickers:
+    if tickers is not None:
         statement = statement.where(Stock.ticker.in_(tickers))
     return list(session.scalars(statement).all())
 
@@ -103,17 +103,19 @@ def _financials(
     ticker: str,
     as_of_date: date,
 ) -> tuple[FinancialStatement | None, FinancialStatement | None]:
-    rows = list(
-        session.scalars(
-            select(FinancialStatement)
+    rows = [
+        financial
+        for financial, source in session.execute(
+            select(FinancialStatement, SourceDocument)
+            .outerjoin(SourceDocument, SourceDocument.id == FinancialStatement.source_document_id)
             .where(
                 FinancialStatement.ticker == ticker,
                 FinancialStatement.period_end_date <= as_of_date,
             )
             .order_by(FinancialStatement.period_end_date.desc())
-            .limit(2)
         ).all()
-    )
+        if not _is_mock_source_document(source)
+    ][:2]
     current = rows[0] if rows else None
     previous = rows[1] if len(rows) > 1 else None
     return current, previous
@@ -124,11 +126,15 @@ def _price_metrics(
     ticker: str,
     as_of_date: date,
 ) -> PriceMetric | None:
-    return session.scalars(
+    rows = session.scalars(
         select(PriceMetric)
         .where(PriceMetric.ticker == ticker, PriceMetric.trade_date <= as_of_date)
         .order_by(PriceMetric.trade_date.desc())
-    ).first()
+    )
+    for row in rows:
+        if not _is_mock_or_fallback_provider(row.source):
+            return row
+    return None
 
 
 def _evidence(
@@ -331,6 +337,23 @@ def _source_document_ids(
             for source_id in source_ids.get(evidence_id, [])
         }
     )
+
+
+def _is_mock_source_document(source: SourceDocument | None) -> bool:
+    if source is None:
+        return False
+    values = [
+        source.source_name,
+        source.external_id,
+        source.title,
+        str(source.metadata_ or ""),
+    ]
+    return any(_is_mock_or_fallback_provider(value) for value in values)
+
+
+def _is_mock_or_fallback_provider(value: object) -> bool:
+    normalized = str(value or "").upper()
+    return "MOCK" in normalized or "FALLBACK" in normalized
 
 
 def _severity(penalty_points: float) -> str:
