@@ -771,7 +771,7 @@ def test_ingestion_scheduler_enable_gate_documents_live_provider_prerequisites()
 
     assert "Scheduler Enable Gate" in scheduler_gate
     assert "Secrets Manager" in scheduler_gate
-    assert "ingest_provider_batch" in scheduler_gate
+    assert "refresh_score_snapshots" in scheduler_gate
     assert "check_provider_egress" in scheduler_gate
     assert "outbound internet egress" in scheduler_gate
     assert "S3 raw archive" in scheduler_gate

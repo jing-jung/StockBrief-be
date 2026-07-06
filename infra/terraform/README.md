@@ -508,12 +508,12 @@ network reachability; DNS, connection, and timeout failures keep
 `outbound_internet_egress_verified` effectively false for scheduler enable
 purposes. It does not send API keys or client secrets.
 
-The backend Lambda can run provider ingestion through the same handler used for
-maintenance events:
+The backend Lambda can run provider ingestion and score refresh through the
+same handler used for maintenance events:
 
 ```json
 {
-  "stockbrief_operation": "ingest_provider_batch",
+  "stockbrief_operation": "refresh_score_snapshots",
   "provider": "OpenDART",
   "tickers": ["005930"],
   "source_date": "2026-06-18"
@@ -569,8 +569,9 @@ Optional KRX endpoint overrides:
 - `KRX_KOSDAQ_DAILY_URL`
 
 Keep the scheduler disabled for the first dev apply. Manually invoke
-`ingest_provider_batch` first, confirm `ingestion_runs`, normalized rows, S3 raw
-objects, and DLQ behavior, then enable the scheduler in a separate reviewed PR.
+`refresh_score_snapshots` with a provider first, confirm `ingestion_runs`,
+normalized rows, refreshed recommendation scores, S3 raw objects, and DLQ
+behavior, then enable the scheduler in a separate reviewed PR.
 If Lambda runs in private subnets, S3 raw archive requires the S3 Gateway VPC
 Endpoint. Real external provider calls still require an outbound internet path
 such as NAT or another approved egress design before enabling scheduled jobs.
@@ -582,8 +583,9 @@ complete and recorded in the PR body:
 
 - `OPENDART_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, and
   `KRX_API_KEY` are populated in Secrets Manager outside git.
-- A manual `ingest_provider_batch` run succeeds for the target provider and
-  ticker list without `missing_api_key` fallback.
+- A manual `refresh_score_snapshots` run succeeds for the target provider and
+  ticker list without `missing_api_key` fallback, and refreshed score rows
+  include provider freshness metadata.
 - Lambda outbound internet egress to the selected provider is verified with
   `check_provider_egress` from the deployed Lambda environment. S3 Gateway VPC
   Endpoint only covers raw archive writes to S3; it does not provide internet
@@ -593,7 +595,9 @@ complete and recorded in the PR body:
 - S3 raw archive objects are written for the manual run and the SQS DLQ remains
   empty after the smoke test.
 - The schedule expression, provider job list, and ticker list are reviewed for
-  cost, rate-limit, and data freshness expectations. Use
+  cost, rate-limit, and data freshness expectations. Scheduled provider jobs
+  call `refresh_score_snapshots`, which runs provider ingestion and then
+  materializes only succeeded or replayed tickers. Use
   `ingestion_schedule_jobs` for more than one provider; the legacy
   `ingestion_schedule_provider` and `ingestion_schedule_tickers` variables are
   used only when `ingestion_schedule_jobs` is empty.
@@ -608,7 +612,7 @@ Current dev scheduler review evidence for issues #199/#200:
 - Provider egress was reachable from Lambda: OpenDART returned HTTP 200 and
   NAVER_NEWS returned an HTTP 400 validation response for the unauthenticated
   probe.
-- Manual `ingest_provider_batch` succeeded for `000660`, source date
+- Manual `refresh_score_snapshots` succeeded for `000660`, source date
   `2026-06-26`, with no `missing_api_key` fallback.
 - NAVER_NEWS inserted 10 normalized evidence rows. OpenDART completed with 0
   inserts for the selected disclosure date.
@@ -901,13 +905,13 @@ keys, tokens, endpoints, or copied secret payloads.
    unset OPENDART_API_KEY NAVER_CLIENT_ID NAVER_CLIENT_SECRET KRX_API_KEY
    ```
 
-7. Run one manual Lambda ingestion per provider before enabling any scheduler.
-   Replace `YYYY-MM-DD` with the business date you want to verify:
+7. Run one manual Lambda score refresh per provider before enabling any
+   scheduler. Replace `YYYY-MM-DD` with the business date you want to verify:
 
    ```bash
    aws lambda invoke \
      --function-name stockbrief-dev-api \
-     --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"OpenDART","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+     --payload '{"stockbrief_operation":"refresh_score_snapshots","provider":"OpenDART","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
      --cli-binary-format raw-in-base64-out \
      /tmp/stockbrief-opendart-ingest-response.json \
      --profile stockbrief-dev \
@@ -915,7 +919,7 @@ keys, tokens, endpoints, or copied secret payloads.
 
    aws lambda invoke \
      --function-name stockbrief-dev-api \
-     --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"NAVER_NEWS","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+     --payload '{"stockbrief_operation":"refresh_score_snapshots","provider":"NAVER_NEWS","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
      --cli-binary-format raw-in-base64-out \
      /tmp/stockbrief-naver-ingest-response.json \
      --profile stockbrief-dev \
@@ -923,7 +927,7 @@ keys, tokens, endpoints, or copied secret payloads.
 
    aws lambda invoke \
      --function-name stockbrief-dev-api \
-     --payload '{"stockbrief_operation":"ingest_provider_batch","provider":"KRX","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
+     --payload '{"stockbrief_operation":"refresh_score_snapshots","provider":"KRX","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
      --cli-binary-format raw-in-base64-out \
      /tmp/stockbrief-krx-ingest-response.json \
      --profile stockbrief-dev \

@@ -133,6 +133,8 @@ Use `refresh_score_snapshots` when a provider ingest should immediately refresh
 eligible score snapshots. The operation runs provider ingestion first when
 `provider` is present, sends only succeeded or replayed tickers to the
 materializer, and records provider freshness on refreshed snapshots.
+EventBridge Scheduler provider jobs use this operation so scheduled collection
+does not leave stale recommendation scores behind.
 
 Local patched adapter shape:
 
@@ -153,6 +155,27 @@ Expected result:
   materializer processed.
 - `provider_status` is `success`, `partial_failed`, `failed`, or `stale`.
 - Refreshed score rows include `data_freshness.providers`.
+
+For market-wide precomputation without a live provider call, omit `provider`
+and select a stored universe. `tier_a` defaults to the top 100 active stocks,
+`tier_b` to the top 300, ordered by the latest KRX `market_cap` and
+`trading_value`. `stock_limit` and `stock_offset` still cap each Lambda batch.
+
+```json
+{
+  "stockbrief_operation": "refresh_score_snapshots",
+  "source_date": "YYYY-MM-DD",
+  "score_universe": "tier_a",
+  "markets": ["KOSPI", "KOSDAQ"],
+  "stock_limit": 100,
+  "stock_offset": 0
+}
+```
+
+Tier C is intentionally just the full active universe (`score_universe="all"`)
+with explicit market and offset batches. Keep embedding out of the score
+refresh path until a vector store and retention policy are reviewed; use
+`evidence_chunks` as stored evidence for now.
 
 ## Manual Provider Smoke
 

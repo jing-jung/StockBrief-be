@@ -62,7 +62,7 @@ class CandidateService:
         limit: int,
         score_version: str | None = None,
     ) -> RecommendationCandidateListResponse:
-        rows = self._candidate_rows(
+        rows, evidence_summaries = self._candidate_rows(
             market=market,
             sector=sector,
             score_version=score_version,
@@ -77,7 +77,10 @@ class CandidateService:
             risk_profile=risk_profile,
             risk_counts=risk_counts,
         )[:limit]
-        candidates = self._candidate_responses(rows)
+        candidates = self._candidate_responses(
+            rows,
+            evidence_summaries=evidence_summaries,
+        )
         return RecommendationCandidateListResponse(
             items=candidates,
             count=len(candidates),
@@ -385,7 +388,10 @@ class CandidateService:
         market: str | None,
         sector: str | None,
         score_version: str | None = None,
-    ) -> list[tuple[Stock, RecommendationScore]]:
+    ) -> tuple[
+        list[tuple[Stock, RecommendationScore]],
+        dict[str, CandidateEvidenceSummaryContract],
+    ]:
         selected_scores = self._selected_scores_subquery(score_version)
         statement = (
             select(Stock, RecommendationScore)
@@ -401,11 +407,15 @@ class CandidateService:
             statement = statement.where(Stock.sector == sector)
 
         rows = self.session.execute(statement).all()
+        evidence_summaries = self._candidate_evidence_summaries(
+            [stock.ticker for stock, _ in rows]
+        )
         return [
             (stock, score)
             for stock, score in rows
             if _passes_evidence_gate(score)
-        ]
+            and _has_listable_live_evidence(evidence_summaries.get(stock.ticker))
+        ], evidence_summaries
 
     def _selected_scores_subquery(self, score_version: str | None):
         selected_score_version = score_version or SCORE_VERSION
@@ -428,6 +438,8 @@ class CandidateService:
     def _candidate_responses(
         self,
         rows: list[tuple[Stock, RecommendationScore]],
+        *,
+        evidence_summaries: dict[str, CandidateEvidenceSummaryContract] | None = None,
     ) -> list[RecommendationCandidateResponse]:
         if not rows:
             return []
@@ -455,7 +467,7 @@ class CandidateService:
         ).all()
         for risk in risks:
             risks_by_key[(risk.ticker, risk.as_of_date)].append(risk)
-        evidence_summaries = self._candidate_evidence_summaries(tickers)
+        evidence_summaries = evidence_summaries or self._candidate_evidence_summaries(tickers)
 
         return [
             _candidate_response_from_loaded(
@@ -720,6 +732,14 @@ def _passes_evidence_gate(score: RecommendationScore) -> bool:
     if not isinstance(score.data_freshness, dict) or not score.data_freshness.get("as_of"):
         return False
     return True
+
+
+def _has_listable_live_evidence(
+    evidence_summary: CandidateEvidenceSummaryContract | None,
+) -> bool:
+    if evidence_summary is None or evidence_summary.latest_at is None:
+        return False
+    return evidence_summary.news_count + evidence_summary.disclosure_count >= 2
 
 
 def _score_components(components: list[dict[str, object]]) -> list[ScoreComponentResponse]:

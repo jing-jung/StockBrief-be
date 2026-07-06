@@ -398,19 +398,19 @@ variable "ingestion_raw_retention_days" {
 }
 
 variable "enable_ingestion_scheduler" {
-  description = "Whether to create an EventBridge Scheduler rule for provider ingestion. Keep false until provider credentials and target tickers are approved."
+  description = "Whether to create EventBridge Scheduler rules for provider ingestion plus score refresh. Keep false until provider credentials and target tickers are approved."
   type        = bool
   default     = false
 }
 
 variable "ingestion_schedule_expression" {
-  description = "EventBridge Scheduler expression for provider ingestion."
+  description = "EventBridge Scheduler expression for provider ingestion plus score refresh."
   type        = string
   default     = "cron(0 18 ? * MON-FRI *)"
 }
 
 variable "ingestion_schedule_provider" {
-  description = "Provider passed to the scheduled ingest_provider_batch operation."
+  description = "Provider passed to the scheduled refresh_score_snapshots operation."
   type        = string
   default     = "OpenDART"
 
@@ -421,13 +421,13 @@ variable "ingestion_schedule_provider" {
 }
 
 variable "ingestion_schedule_tickers" {
-  description = "Tickers passed to the scheduled ingest_provider_batch operation."
+  description = "Tickers passed to the scheduled refresh_score_snapshots operation."
   type        = list(string)
   default     = []
 }
 
 variable "ingestion_schedule_jobs" {
-  description = "Reviewed provider ingestion jobs to schedule. When empty, the legacy ingestion_schedule_provider/tickers variables are used."
+  description = "Reviewed provider ingestion and score refresh jobs to schedule. When empty, the legacy ingestion_schedule_provider/tickers variables are used."
   type = list(object({
     provider            = string
     tickers             = list(string)

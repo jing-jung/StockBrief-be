@@ -1649,6 +1649,56 @@ def test_refresh_score_snapshots_batches_active_market_stocks(
     assert score.total_score is not None
 
 
+def test_refresh_score_snapshots_tier_universe_prioritizes_latest_liquidity(
+    seeded_session: Session,
+) -> None:
+    trade_date = datetime(2026, 7, 3, tzinfo=timezone.utc).date()
+    rows = [
+        ("900001", "테스트대형", Decimal("900000000000000000"), Decimal("1000000")),
+        ("900002", "테스트중형", Decimal("500000000000000000"), Decimal("9000000")),
+        ("900003", "테스트소형", Decimal("100000000000000000"), Decimal("8000000")),
+    ]
+    for ticker, name, market_cap, trading_value in rows:
+        seeded_session.query(PriceMetric).filter(PriceMetric.ticker == ticker).delete()
+        seeded_session.query(Stock).filter(Stock.ticker == ticker).delete()
+        seeded_session.add(
+            Stock(
+                ticker=ticker,
+                company_name=name,
+                market="KOSPI",
+                is_active=True,
+            )
+        )
+        seeded_session.add(
+            PriceMetric(
+                ticker=ticker,
+                trade_date=trade_date,
+                close_price=Decimal("1000"),
+                trading_value=trading_value,
+                market_cap=market_cap,
+                source=KRX_PROVIDER,
+            )
+        )
+    seeded_session.commit()
+
+    result = ingestion_module.refresh_score_snapshots(
+        seeded_session,
+        {
+            "stockbrief_operation": "refresh_score_snapshots",
+            "source_date": "2026-07-03",
+            "score_universe": "tier_a",
+            "markets": ["KOSPI"],
+            "stock_limit": 2,
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["batch"]["universe"] == "tier_a"
+    assert result["batch"]["selected_count"] == 2
+    assert result["successful_tickers"] == ["900001", "900002"]
+    assert result["refresh"]["processed"] == 2
+
+
 def test_persist_failure_rolls_back_normalized_rows_before_marking_failed(
     monkeypatch,
     seeded_session: Session,

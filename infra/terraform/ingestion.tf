@@ -153,7 +153,7 @@ resource "aws_scheduler_schedule" "provider_ingestion" {
     }
 
     input = jsonencode({
-      stockbrief_operation = "ingest_provider_batch"
+      stockbrief_operation = "refresh_score_snapshots"
       provider             = each.value.provider
       tickers              = each.value.tickers
       raise_on_failure     = true

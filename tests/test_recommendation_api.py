@@ -203,6 +203,28 @@ def test_list_recommendation_candidates_does_not_require_risk_signal(
     assert any(item["ticker"] == "005930" for item in items)
 
 
+def test_list_recommendation_candidates_requires_live_evidence(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    seeded_session.execute(delete(EvidenceChunk).where(EvidenceChunk.ticker == "005930"))
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(RecommendationScore.ticker == "005930")
+    ).one()
+    score.evidence_count = 120
+    score.is_candidate_eligible = True
+    seeded_session.commit()
+
+    response = seeded_api_client.get(
+        "/v1/recommendations/candidates",
+        params={"limit": 100},
+    )
+
+    assert response.status_code == 200
+    tickers = [item["ticker"] for item in response.json()["items"]]
+    assert "005930" not in tickers
+
+
 def test_list_recommendation_candidates_filters_and_limits(
     seeded_api_client: TestClient,
 ) -> None:

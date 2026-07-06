@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 import boto3
 from botocore.config import Config
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,11 @@ MAX_TICKERS_PER_BATCH = 20
 MAX_OPENDART_PAGE_COUNT = 100
 MAX_NAVER_NEWS_DISPLAY = 50
 MAX_KRX_STOCK_UNIVERSE_SOURCE_DATES = 31
+SCORE_REFRESH_UNIVERSE_LIMITS = {
+    "all": 300,
+    "tier_a": 100,
+    "tier_b": 300,
+}
 PROVIDER_EGRESS_ENDPOINTS = {
     OPENDART_PROVIDER: "https://opendart.fss.or.kr/api/list.json",
     NAVER_PROVIDER: "https://openapi.naver.com/v1/search/news.json",
@@ -2141,19 +2146,60 @@ def _event_market_filter(event: dict[str, object]) -> list[str]:
 def _score_refresh_tickers(session: Session, event: dict[str, object]) -> list[str] | None:
     has_batch_selector = any(
         key in event
-        for key in ("stock_limit", "stock_offset", "limit", "offset", "markets", "market")
+        for key in (
+            "score_universe",
+            "universe",
+            "stock_limit",
+            "stock_offset",
+            "limit",
+            "offset",
+            "markets",
+            "market",
+        )
     )
     if not has_batch_selector:
         return None
+    universe = _event_score_universe(event)
     markets = _event_market_filter(event)
-    limit = _score_refresh_limit(event.get("stock_limit", event.get("limit")))
+    limit = _score_refresh_limit(event.get("stock_limit", event.get("limit")), universe=universe)
     offset = _nonnegative_int(event.get("stock_offset", event.get("offset")), default=0)
     statement = select(Stock.ticker).where(Stock.is_active.is_(True))
     if markets:
         statement = statement.where(Stock.market.in_(markets))
+    if universe in {"tier_a", "tier_b"}:
+        latest_price_dates = (
+            select(
+                PriceMetric.ticker.label("ticker"),
+                func.max(PriceMetric.trade_date).label("trade_date"),
+            )
+            .group_by(PriceMetric.ticker)
+            .subquery()
+        )
+        statement = (
+            statement.outerjoin(
+                latest_price_dates,
+                latest_price_dates.c.ticker == Stock.ticker,
+            )
+            .outerjoin(
+                PriceMetric,
+                and_(
+                    PriceMetric.ticker == Stock.ticker,
+                    PriceMetric.trade_date == latest_price_dates.c.trade_date,
+                ),
+            )
+            .order_by(
+                PriceMetric.market_cap.is_(None).asc(),
+                PriceMetric.market_cap.desc(),
+                PriceMetric.trading_value.is_(None).asc(),
+                PriceMetric.trading_value.desc(),
+                Stock.ticker.asc(),
+            )
+        )
+    else:
+        statement = statement.order_by(Stock.ticker.asc())
     return list(
         session.scalars(
-            statement.order_by(Stock.ticker.asc()).limit(limit).offset(offset)
+            statement.limit(limit).offset(offset)
         ).all()
     )
 
@@ -2165,7 +2211,11 @@ def _score_refresh_batch_metadata(
     if tickers is None:
         return None
     return {
-        "limit": _score_refresh_limit(event.get("stock_limit", event.get("limit"))),
+        "universe": _event_score_universe(event),
+        "limit": _score_refresh_limit(
+            event.get("stock_limit", event.get("limit")),
+            universe=_event_score_universe(event),
+        ),
         "offset": _nonnegative_int(event.get("stock_offset", event.get("offset")), default=0),
         "markets": _event_market_filter(event),
         "selected_count": len(tickers),
@@ -2179,6 +2229,14 @@ def _normalize_provider_market(market: str) -> str:
     if normalized in {"KOSDAQ", "KQ", "KSQ"}:
         return "KOSDAQ"
     return "KOSPI"
+
+
+def _event_score_universe(event: dict[str, object]) -> str:
+    value = event.get("score_universe", event.get("universe", "all"))
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized in SCORE_REFRESH_UNIVERSE_LIMITS:
+        return normalized
+    return "all"
 
 
 def _event_bool(value: object, *, default: bool) -> bool:
@@ -2203,8 +2261,11 @@ def _reconcile_limit(value: object) -> int:
     return min(limit, 100)
 
 
-def _score_refresh_limit(value: object) -> int:
-    limit = _positive_int(value, default=100)
+def _score_refresh_limit(value: object, *, universe: str = "all") -> int:
+    limit = _positive_int(
+        value,
+        default=SCORE_REFRESH_UNIVERSE_LIMITS.get(universe, 300),
+    )
     return min(limit, 300)
 
 
