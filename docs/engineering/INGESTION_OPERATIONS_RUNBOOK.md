@@ -187,6 +187,23 @@ aws lambda invoke \
   --region ap-northeast-2
 ```
 
+The OpenDART provider refresh persists both disclosure evidence and the latest
+two completed annual financial statement years from
+`fnlttSinglAcntAll.json`. Those real `financial_statements` rows feed
+`financial_stability`, `profitability`, `growth`, and the earnings/book portion
+of `valuation`. If OpenDART has no statement rows for the selected company/year,
+keep the component `missing_data` visible rather than substituting mock or
+fallback financial rows.
+
+OpenDART disclosure search uses a one-year receipt-date window ending at
+`source_date`. This avoids the provider default of only checking the current
+day and supplies `disclosure_event.inputs` from historical filings that were
+published before the score `as_of` date. If an older successful ingestion run
+needs to be bypassed after a payload-shape change, pass a reviewed explicit
+`run_id`; the idempotency hash includes that value so the operation performs a
+fresh provider call while repeated identical `run_id` calls remain duplicate
+safe.
+
 NAVER news refresh:
 
 ```bash
@@ -212,6 +229,29 @@ aws lambda invoke \
   --payload '{"stockbrief_operation":"refresh_score_snapshots","provider":"KRX","tickers":["005930"],"source_date":"YYYY-MM-DD"}' \
   --cli-binary-format raw-in-base64-out \
   /tmp/stockbrief-krx-refresh-response.json \
+  --profile stockbrief-dev \
+  --region ap-northeast-2
+```
+
+Ticker-level KRX refresh also recalculates the latest row's `momentum_20d` and
+`volatility_20d` once the ticker has at least 21 real KRX close-price rows.
+Use one refresh per trading day for a small smoke target, or
+`seed_krx_stock_universe.source_dates` for market-wide history.
+
+KRX market-wide bootstrap:
+
+Use `seed_krx_stock_universe` to backfill KRX stock master rows and daily price
+metrics before market-wide score refresh. Pass `source_dates` when enough
+trading-day history is available; once a ticker has 21 price rows, the latest
+`price_metrics` row receives `momentum_20d` and `volatility_20d`, which removes
+`momentum_volatility.inputs` from the score result.
+
+```bash
+aws lambda invoke \
+  --function-name stockbrief-dev-api \
+  --payload '{"stockbrief_operation":"seed_krx_stock_universe","source_dates":["YYYY-MM-DD","YYYY-MM-DD"],"markets":["KOSPI","KOSDAQ"]}' \
+  --cli-binary-format raw-in-base64-out \
+  /tmp/stockbrief-krx-universe-response.json \
   --profile stockbrief-dev \
   --region ap-northeast-2
 ```

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -22,6 +23,7 @@ from app.db import get_session_factory
 from app.orm import (
     Disclosure,
     EvidenceChunk,
+    FinancialStatement,
     IngestionRun,
     NewsItem,
     PriceMetric,
@@ -49,6 +51,7 @@ SUPPORTED_PROVIDERS = (OPENDART_PROVIDER, NAVER_PROVIDER, KRX_PROVIDER)
 MAX_TICKERS_PER_BATCH = 20
 MAX_OPENDART_PAGE_COUNT = 100
 MAX_NAVER_NEWS_DISPLAY = 50
+MAX_KRX_STOCK_UNIVERSE_SOURCE_DATES = 31
 PROVIDER_EGRESS_ENDPOINTS = {
     OPENDART_PROVIDER: "https://opendart.fss.or.kr/api/list.json",
     NAVER_PROVIDER: "https://openapi.naver.com/v1/search/news.json",
@@ -210,6 +213,8 @@ class ProviderIngestionService:
             request_params={
                 "page_count": request.page_count,
                 "news_display": request.news_display,
+                "payload_version": _provider_payload_version(request.provider),
+                "run_id": request.run_id,
             },
         )
 
@@ -274,6 +279,18 @@ class ProviderIngestionService:
                     },
                 )
             elif (
+                request.provider == OPENDART_PROVIDER
+                and external_result.missing_data
+            ):
+                completed = self.idempotency.mark_partial_failed(
+                    run=run,
+                    result_counts=result_counts,
+                    error_summary={
+                        "code": "opendart_partial_provider_fallback",
+                        "missing_data": external_result.missing_data,
+                    },
+                )
+            elif (
                 request.provider == KRX_PROVIDER
                 and result_counts["inserted"] + result_counts["updated"] == 0
             ):
@@ -320,10 +337,19 @@ class ProviderIngestionService:
     ) -> ExternalApiResult:
         stock = self.session.get(Stock, ticker)
         if request.provider == OPENDART_PROVIDER:
-            return OpenDartClient(settings=self.settings, session=self.session).list_disclosures(
+            client = OpenDartClient(settings=self.settings, session=self.session)
+            disclosure_window = _opendart_disclosure_window(request.source_date)
+            disclosures = client.list_disclosures(
                 ticker=ticker,
                 page_count=request.page_count,
+                bgn_de=disclosure_window["bgn_de"],
+                end_de=disclosure_window["end_de"],
             )
+            financials = client.list_financial_statements(
+                ticker=ticker,
+                business_years=_opendart_financial_years(request.source_date),
+            )
+            return _combined_opendart_result(disclosures, financials)
         if request.provider == KRX_PROVIDER:
             return KrxClient(settings=self.settings, session=self.session).daily_trading(
                 ticker=ticker,
@@ -348,11 +374,20 @@ class ProviderIngestionService:
         if result.data_status == "fallback":
             return {"inserted": 0, "updated": 0, "skipped": 1}
         if provider == OPENDART_PROVIDER:
-            return self._persist_disclosures(
+            disclosure_counts = self._persist_disclosures(
                 ticker=ticker,
                 result=result,
                 raw_archive_uri=raw_archive_uri,
             )
+            financial_counts = self._persist_financial_statements(
+                ticker=ticker,
+                result=result,
+                raw_archive_uri=raw_archive_uri,
+            )
+            return {
+                key: disclosure_counts[key] + financial_counts[key]
+                for key in disclosure_counts
+            }
         if provider == KRX_PROVIDER:
             return self._persist_krx_prices(
                 ticker=ticker,
@@ -445,6 +480,75 @@ class ProviderIngestionService:
         self.session.flush()
         return counts
 
+    def _persist_financial_statements(
+        self,
+        *,
+        ticker: str,
+        result: ExternalApiResult,
+        raw_archive_uri: str | None,
+    ) -> dict[str, int]:
+        counts = {"inserted": 0, "updated": 0, "skipped": 0}
+        grouped: dict[tuple[int, str], list[dict[str, Any]]] = {}
+        for item in _iter_dicts(result.payload.get("financial_statements")):
+            fiscal_year = _positive_int(item.get("bsns_year"), default=0)
+            fs_div = str(item.get("fs_div") or "").strip() or "unknown"
+            if fiscal_year <= 0:
+                counts["skipped"] += 1
+                continue
+            grouped.setdefault((fiscal_year, fs_div), []).append(item)
+
+        for (fiscal_year, fs_div), rows in grouped.items():
+            values = _financial_statement_values(rows)
+            if not values:
+                counts["skipped"] += 1
+                continue
+            stock = self.session.get(Stock, ticker)
+            company_name = stock.company_name if stock else ticker
+            raw_content = json.dumps(rows, ensure_ascii=False, sort_keys=True)
+            source_document = upsert_source_document(
+                self.session,
+                ticker=ticker,
+                source_type="financial",
+                source_name=OPENDART_PROVIDER,
+                source_url=None,
+                external_id=f"OpenDART:financial:{ticker}:{fiscal_year}:FY:{fs_div}",
+                title=f"{company_name} OpenDART {fiscal_year} FY financial statement",
+                published_at=datetime(fiscal_year, 12, 31, tzinfo=timezone.utc),
+                raw_content=raw_content,
+                metadata={
+                    "provider": OPENDART_PROVIDER,
+                    "fs_div": fs_div,
+                    "raw_archive_uri": raw_archive_uri,
+                },
+            )
+            existing = self.session.scalars(
+                select(FinancialStatement).where(
+                    FinancialStatement.ticker == ticker,
+                    FinancialStatement.fiscal_year == fiscal_year,
+                    FinancialStatement.fiscal_period == "FY",
+                )
+            ).first()
+            if existing:
+                for key, value in values.items():
+                    setattr(existing, key, value)
+                existing.period_end_date = date(fiscal_year, 12, 31)
+                existing.source_document_id = source_document.id
+                counts["updated"] += 1
+                continue
+            self.session.add(
+                FinancialStatement(
+                    ticker=ticker,
+                    fiscal_year=fiscal_year,
+                    fiscal_period="FY",
+                    period_end_date=date(fiscal_year, 12, 31),
+                    source_document_id=source_document.id,
+                    **values,
+                )
+            )
+            counts["inserted"] += 1
+        self.session.flush()
+        return counts
+
     def _persist_krx_prices(
         self,
         *,
@@ -454,6 +558,7 @@ class ProviderIngestionService:
     ) -> dict[str, int]:
         counts = {"inserted": 0, "updated": 0, "skipped": 0}
         base_date = str(result.payload.get("base_date") or "").strip()
+        touched = False
         for item in _iter_dicts(result.payload.get("OutBlock_1")):
             normalized = _normalize_krx_price_item(item, base_date=base_date)
             if normalized is None or normalized["ticker"] != ticker:
@@ -495,6 +600,7 @@ class ProviderIngestionService:
                 existing.change_rate = normalized["change_rate"]
                 existing.source = KRX_PROVIDER
                 counts["updated"] += 1
+                touched = True
             else:
                 self.session.add(
                     PriceMetric(
@@ -509,7 +615,11 @@ class ProviderIngestionService:
                     )
                 )
                 counts["inserted"] += 1
+                touched = True
         self.session.flush()
+        if touched:
+            _refresh_krx_technical_metrics(self.session, ticker=ticker)
+            self.session.flush()
         return counts
 
     def _persist_news(
@@ -609,43 +719,52 @@ def handle_refresh_score_snapshots_event(event: dict[str, object]) -> dict[str, 
 
 
 def seed_krx_stock_universe_from_event(event: dict[str, object]) -> dict[str, Any]:
-    source_date = _compact_source_date(
-        event.get("source_date") or datetime.now(timezone.utc).date().isoformat()
-    )
+    source_dates = _event_source_dates(event)
+    if len(source_dates) > MAX_KRX_STOCK_UNIVERSE_SOURCE_DATES:
+        return {
+            "ok": False,
+            "operation": "seed_krx_stock_universe",
+            "error": "source_date_limit_exceeded",
+            "max_source_dates": MAX_KRX_STOCK_UNIVERSE_SOURCE_DATES,
+            "source_date_count": len(source_dates),
+        }
     markets = _event_markets(event)
     with get_session_factory()() as session:
         settings = hydrate_external_api_settings(get_settings())
         client = KrxClient(settings=settings, session=session)
         results = []
         totals = {"inserted": 0, "updated": 0, "skipped": 0}
-        for market in markets:
-            result = client.daily_trading(
-                ticker="",
-                base_date=source_date,
-                market=market,
-                bypass_cache=True,
-            )
-            counts = persist_krx_stock_master(
-                session,
-                market=market,
-                payload=result.payload,
-            )
-            for key in totals:
-                totals[key] += counts[key]
-            results.append(
-                {
-                    "market": market,
-                    "data_status": result.data_status,
-                    "status_code": result.status_code,
-                    "counts": counts,
-                    "missing_data": result.missing_data,
-                }
-            )
+        for source_date in source_dates:
+            for market in markets:
+                result = client.daily_trading(
+                    ticker="",
+                    base_date=source_date,
+                    market=market,
+                    bypass_cache=True,
+                )
+                counts = persist_krx_stock_master(
+                    session,
+                    market=market,
+                    payload=result.payload,
+                )
+                for key in totals:
+                    totals[key] += counts[key]
+                results.append(
+                    {
+                        "source_date": source_date,
+                        "market": market,
+                        "data_status": result.data_status,
+                        "status_code": result.status_code,
+                        "counts": counts,
+                        "missing_data": result.missing_data,
+                    }
+                )
         session.commit()
     return {
         "ok": any(item["counts"]["inserted"] + item["counts"]["updated"] > 0 for item in results),
         "operation": "seed_krx_stock_universe",
-        "source_date": source_date,
+        "source_date": source_dates[-1],
+        "source_dates": source_dates,
         "markets": markets,
         "totals": totals,
         "results": results,
@@ -660,6 +779,7 @@ def persist_krx_stock_master(
 ) -> dict[str, int]:
     counts = {"inserted": 0, "updated": 0, "skipped": 0}
     market_key = _normalize_provider_market(market)
+    price_items: list[dict[str, Any]] = []
     for item in _iter_dicts(payload.get("OutBlock_1")):
         normalized = _normalize_krx_stock_item(item, market=market_key)
         if normalized is None:
@@ -673,6 +793,9 @@ def persist_krx_stock_master(
             for key, value in normalized.items():
                 setattr(stock, key, value)
             counts["updated"] += 1
+        price_items.append(item)
+    session.flush()
+    for item in price_items:
         _upsert_krx_price_metric_from_item(session, item=item, payload=payload)
     session.flush()
     return counts
@@ -709,6 +832,7 @@ def _upsert_krx_price_metric_from_item(
                 source=KRX_PROVIDER,
             )
         )
+        _refresh_krx_technical_metrics(session, normalized["ticker"])
         return
     existing.close_price = normalized["close_price"]
     existing.volume = normalized["volume"]
@@ -716,6 +840,51 @@ def _upsert_krx_price_metric_from_item(
     existing.market_cap = normalized["market_cap"]
     existing.change_rate = normalized["change_rate"]
     existing.source = KRX_PROVIDER
+    _refresh_krx_technical_metrics(session, normalized["ticker"])
+
+
+def _refresh_krx_technical_metrics(session: Session, ticker: str) -> None:
+    rows = session.scalars(
+        select(PriceMetric)
+        .where(PriceMetric.ticker == ticker)
+        .order_by(PriceMetric.trade_date.desc())
+        .limit(21)
+    ).all()
+    if len(rows) < 21:
+        return
+    ordered = list(reversed(rows))
+    maybe_closes = [_decimal_to_float(row.close_price) for row in ordered]
+    if any(value is None or value <= 0 for value in maybe_closes):
+        return
+    closes = [value for value in maybe_closes if value is not None]
+
+    latest = ordered[-1]
+    first_close = closes[0]
+    latest_close = closes[-1]
+    latest.momentum_20d = Decimal(
+        str(round((latest_close - first_close) / first_close, 6))
+    )
+
+    daily_returns = []
+    for previous, current in zip(closes, closes[1:]):
+        daily_returns.append((current - previous) / previous)
+    latest.volatility_20d = Decimal(
+        str(round(_sample_stddev(daily_returns) * math.sqrt(252), 6))
+    )
+
+
+def _sample_stddev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _decimal_to_float(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def refresh_score_snapshots(session: Session, event: dict[str, object]) -> dict[str, Any]:
@@ -1457,6 +1626,83 @@ def build_request_hash(
     )
 
 
+def _combined_opendart_result(
+    disclosures: ExternalApiResult,
+    financials: ExternalApiResult,
+) -> ExternalApiResult:
+    payload = {
+        **disclosures.payload,
+        "financial_statements": list(
+            financials.payload.get("financial_statements") or []
+        ),
+        "financial_missing_data": list(financials.missing_data),
+    }
+    missing_data = [*disclosures.missing_data, *financials.missing_data]
+    data_status = (
+        "available"
+        if disclosures.data_status == "available" or financials.data_status == "available"
+        else "fallback"
+    )
+    return ExternalApiResult(
+        provider=OPENDART_PROVIDER,
+        endpoint=f"{disclosures.endpoint}+{financials.endpoint}",
+        cache_key=f"{disclosures.cache_key}+{financials.cache_key}",
+        payload=payload,
+        data_status=data_status,
+        status_code=disclosures.status_code or financials.status_code,
+        missing_data=missing_data,
+    )
+
+
+def _opendart_financial_years(source_date: str) -> list[int]:
+    compact = _compact_source_date(source_date)
+    as_of = _parse_yyyymmdd(compact)
+    source_day = as_of.date() if as_of is not None else date.today()
+    latest_available_year = source_day.year - 1
+    if source_day.month <= 3:
+        latest_available_year -= 1
+    return [latest_available_year, latest_available_year - 1]
+
+
+def _opendart_disclosure_window(source_date: str) -> dict[str, str]:
+    compact = _compact_source_date(source_date)
+    try:
+        end_date = datetime.strptime(compact, "%Y%m%d").date()
+    except ValueError:
+        end_date = date.today()
+    begin_date = end_date - timedelta(days=365)
+    return {
+        "bgn_de": begin_date.strftime("%Y%m%d"),
+        "end_de": end_date.strftime("%Y%m%d"),
+    }
+
+
+def _financial_statement_values(rows: list[dict[str, Any]]) -> dict[str, Decimal]:
+    values: dict[str, Decimal] = {}
+    for row in rows:
+        account_name = _normalize_account_name(row.get("account_nm"))
+        amount = _decimal_from_provider(row, "thstrm_amount", "thstrm_add_amount")
+        if amount is None:
+            continue
+        if account_name in {"매출액", "수익매출액", "영업수익"}:
+            values.setdefault("revenue", amount)
+        elif account_name in {"영업이익", "영업이익손실"}:
+            values.setdefault("operating_income", amount)
+        elif account_name in {"당기순이익", "당기순이익손실", "연결당기순이익"}:
+            values.setdefault("net_income", amount)
+        elif account_name == "자산총계":
+            values.setdefault("total_assets", amount)
+        elif account_name == "부채총계":
+            values.setdefault("total_liabilities", amount)
+        elif account_name == "자본총계":
+            values.setdefault("total_equity", amount)
+    return values
+
+
+def _normalize_account_name(value: object) -> str:
+    return re.sub(r"[\s()]", "", str(value or ""))
+
+
 def upsert_source_document(
     session: Session,
     *,
@@ -1796,6 +2042,14 @@ def _job_type(provider: str) -> str:
     return "news"
 
 
+def _provider_payload_version(provider: str) -> str:
+    if provider == OPENDART_PROVIDER:
+        return "opendart-disclosure-financial-v2"
+    if provider == KRX_PROVIDER:
+        return "krx-price-technical-v2"
+    return "provider-payload-v1"
+
+
 def _first_secret_value(secret: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = secret.get(key)
@@ -1843,6 +2097,26 @@ def _event_providers(event: dict[str, object]) -> list[str]:
         provider_value = event.get("provider")
         values = [str(provider_value).strip()] if isinstance(provider_value, str) and provider_value.strip() else []
     return [_normalize_provider(value) for value in values]
+
+
+def _event_source_dates(event: dict[str, object]) -> list[str]:
+    source_dates_value = event.get("source_dates")
+    if isinstance(source_dates_value, str):
+        values = [item.strip() for item in source_dates_value.split(",") if item.strip()]
+    elif isinstance(source_dates_value, list):
+        values = [str(item).strip() for item in source_dates_value if str(item).strip()]
+    else:
+        values = []
+    if not values:
+        values = [str(event.get("source_date") or datetime.now(timezone.utc).date().isoformat())]
+    seen: set[str] = set()
+    source_dates = []
+    for value in values:
+        source_date = _compact_source_date(value)
+        if source_date and source_date not in seen:
+            seen.add(source_date)
+            source_dates.append(source_date)
+    return source_dates
 
 
 def _event_markets(event: dict[str, object]) -> list[str]:

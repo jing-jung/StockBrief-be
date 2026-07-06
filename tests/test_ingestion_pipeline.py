@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from app.config import Settings
 from app.orm import (
     Disclosure,
     EvidenceChunk,
+    FinancialStatement,
     IngestionRun,
     NewsItem,
     PriceMetric,
@@ -32,6 +34,7 @@ from app.services.ingestion import (
     NoopPayloadArchiver,
     ProviderIngestionRequest,
     ProviderIngestionService,
+    _opendart_financial_years,
     build_request_hash,
     build_run_id,
     check_raw_archive_write,
@@ -80,6 +83,42 @@ class FailingArchiver:
         raise RuntimeError("s3 endpoint unavailable with secret-like token")
 
 
+@pytest.fixture(autouse=True)
+def default_empty_opendart_financials(monkeypatch):
+    def fake_list_financial_statements(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        business_years: list[int],
+        report_code: str = "11011",
+    ):
+        if not self.settings.opendart_api_key:
+            return ExternalApiResult(
+                provider=OPENDART_PROVIDER,
+                endpoint="/fnlttSinglAcntAll.json",
+                cache_key=f"financials:{ticker}:missing",
+                data_status="fallback",
+                payload={"ticker": ticker, "financial_statements": []},
+                missing_data=[
+                    {"field": "OPENDART_API_KEY", "reason": "missing_api_key"}
+                ],
+            )
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/fnlttSinglAcntAll.json",
+            cache_key=f"financials:{ticker}:empty",
+            data_status="available",
+            status_code=200,
+            payload={"ticker": ticker, "financial_statements": []},
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_financial_statements",
+        fake_list_financial_statements,
+    )
+
+
 def test_build_request_hash_uses_provider_ticker_source_date_and_request_params() -> None:
     base = build_request_hash(
         provider=OPENDART_PROVIDER,
@@ -106,6 +145,11 @@ def test_build_request_hash_uses_provider_ticker_source_date_and_request_params(
         source_date="2026-06-18",
         request_params={"page_count": 10},
     )
+
+
+def test_opendart_financial_years_waits_until_q2_for_latest_fy() -> None:
+    assert _opendart_financial_years("2026-03-31") == [2024, 2023]
+    assert _opendart_financial_years("2026-04-01") == [2025, 2024]
 
 
 def test_provider_ingestion_request_normalizes_event_fields() -> None:
@@ -175,7 +219,15 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
     monkeypatch,
     seeded_session: Session,
 ) -> None:
-    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
             endpoint="/list.json",
@@ -236,9 +288,14 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
         "skipped": 0,
     }
     assert replay["results"][0]["status"] == "replayed"
-    assert replay_with_different_run_id["results"][0]["status"] == "replayed"
+    assert replay_with_different_run_id["results"][0]["status"] == "succeeded"
     assert replay_with_different_run_id["results"][0]["run_id"] == "manual-rerun-005930"
-    assert len(archiver.calls) == 1
+    assert replay_with_different_run_id["results"][0]["result_counts"] == {
+        "inserted": 0,
+        "updated": 1,
+        "skipped": 0,
+    }
+    assert len(archiver.calls) == 2
 
     disclosure = seeded_session.scalars(
         select(Disclosure).where(Disclosure.receipt_no == "202606180001")
@@ -273,6 +330,182 @@ def test_opendart_ingestion_upserts_disclosures_and_sources(
         )
     ).one()
     assert run.status == "succeeded"
+
+
+def test_opendart_ingestion_upserts_financial_statements_for_score_inputs(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    ticker = "456789"
+    if seeded_session.get(Stock, ticker) is None:
+        seeded_session.add(
+            Stock(
+                ticker=ticker,
+                company_name="테스트재무",
+                market="KOSPI",
+                is_active=True,
+            )
+        )
+    seeded_session.add(
+        PriceMetric(
+            ticker=ticker,
+            trade_date=date(2026, 7, 3),
+            close_price=Decimal("10000"),
+            volume=Decimal("1000000"),
+            trading_value=Decimal("10000000000"),
+            market_cap=Decimal("140000000000"),
+            source=KRX_PROVIDER,
+        )
+    )
+    seeded_session.commit()
+
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key=f"disclosures:{ticker}:empty",
+            data_status="available",
+            status_code=200,
+            payload={"list": []},
+        )
+
+    def fake_list_financial_statements(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        business_years: list[int],
+        report_code: str = "11011",
+    ):
+        rows = []
+        for business_year, revenue, operating_income in [
+            (2025, "100000000000", "12000000000"),
+            (2024, "80000000000", "9000000000"),
+        ]:
+            rows.extend(
+                [
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "매출액",
+                        "thstrm_amount": revenue,
+                    },
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "영업이익",
+                        "thstrm_amount": operating_income,
+                    },
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "당기순이익",
+                        "thstrm_amount": "10000000000",
+                    },
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "자산총계",
+                        "thstrm_amount": "200000000000",
+                    },
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "부채총계",
+                        "thstrm_amount": "60000000000",
+                    },
+                    {
+                        "ticker": ticker,
+                        "bsns_year": str(business_year),
+                        "reprt_code": report_code,
+                        "fs_div": "CFS",
+                        "account_nm": "자본총계",
+                        "thstrm_amount": "140000000000",
+                    },
+                ]
+            )
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/fnlttSinglAcntAll.json",
+            cache_key=f"financials:{ticker}",
+            data_status="available",
+            status_code=200,
+            payload={"financial_statements": rows},
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_financial_statements",
+        fake_list_financial_statements,
+    )
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY="test-key"),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=[ticker],
+            source_date="2026-07-03",
+        )
+    )
+    refresh = ingestion_module.refresh_score_snapshots(
+        seeded_session,
+        {
+            "stockbrief_operation": "refresh_score_snapshots",
+            "source_date": "2026-07-03",
+            "tickers": [ticker],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["results"][0]["result_counts"] == {
+        "inserted": 2,
+        "updated": 0,
+        "skipped": 0,
+    }
+    assert refresh["refresh"]["processed"] == 1
+    financials = seeded_session.scalars(
+        select(FinancialStatement)
+        .where(FinancialStatement.ticker == ticker)
+        .order_by(FinancialStatement.fiscal_year.desc())
+    ).all()
+    assert [row.fiscal_year for row in financials] == [2025, 2024]
+
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(
+            RecommendationScore.ticker == ticker,
+            RecommendationScore.as_of_date == date(2026, 7, 3),
+            RecommendationScore.score_version == SCORE_VERSION,
+        )
+    ).one()
+    assert "financial_stability.inputs" not in score.missing_data
+    assert "profitability.inputs" not in score.missing_data
+    assert "growth.inputs" not in score.missing_data
+    assert "valuation.inputs" not in score.missing_data
 
 
 def test_evidence_chunk_upsert_recovers_from_concurrent_insert_conflict(
@@ -394,7 +627,15 @@ def test_explicit_run_id_is_scoped_per_ticker_in_batch(
 ) -> None:
     provider_calls: list[str] = []
 
-    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
         provider_calls.append(ticker)
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
@@ -550,7 +791,15 @@ def test_ingestion_status_summarizes_recent_runs_and_latest_evidence(
     monkeypatch,
     seeded_session: Session,
 ) -> None:
-    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
             endpoint="/list.json",
@@ -751,7 +1000,15 @@ def test_provider_fallback_marks_partial_failed_without_persisting_rows(
     monkeypatch,
     seeded_session: Session,
 ) -> None:
-    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
             endpoint="/list.json",
@@ -787,6 +1044,103 @@ def test_provider_fallback_marks_partial_failed_without_persisting_rows(
         "skipped": 1,
     }
     assert result["results"][0]["error_summary"]["code"] == "provider_fallback"
+
+
+def test_opendart_financial_fallback_marks_partial_failed(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/list.json",
+            cache_key=f"disclosures:{ticker}:available",
+            data_status="available",
+            status_code=200,
+            payload={
+                "ticker": ticker,
+                "list": [
+                    {
+                        "rcept_no": "202606180099",
+                        "report_nm": "주요사항보고서",
+                        "rcept_dt": "20260618",
+                    }
+                ],
+            },
+        )
+
+    def fake_list_financial_statements(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        business_years: list[int],
+        report_code: str = "11011",
+    ):
+        return ExternalApiResult(
+            provider=OPENDART_PROVIDER,
+            endpoint="/fnlttSinglAcntAll.json",
+            cache_key=f"financials:{ticker}:fallback",
+            data_status="fallback",
+            status_code=200,
+            payload={"ticker": ticker, "financial_statements": []},
+            missing_data=[
+                {
+                    "provider": OPENDART_PROVIDER,
+                    "field": "financial_statements",
+                    "reason": "no_financial_statement_rows",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_disclosures",
+        fake_list_disclosures,
+    )
+    monkeypatch.setattr(
+        "app.services.ingestion.OpenDartClient.list_financial_statements",
+        fake_list_financial_statements,
+    )
+    service = ProviderIngestionService(
+        seeded_session,
+        settings=Settings(OPENDART_API_KEY="test-key"),
+        archiver=NoopPayloadArchiver(),
+    )
+
+    result = service.run_provider_batch(
+        ProviderIngestionRequest(
+            provider=OPENDART_PROVIDER,
+            tickers=["005930"],
+            source_date="2026-06-18",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["results"][0]["status"] == "partial_failed"
+    assert result["results"][0]["result_counts"] == {
+        "inserted": 1,
+        "updated": 0,
+        "skipped": 0,
+    }
+    assert (
+        result["results"][0]["error_summary"]["code"]
+        == "opendart_partial_provider_fallback"
+    )
+    assert result["results"][0]["error_summary"]["missing_data"] == [
+        {
+            "provider": OPENDART_PROVIDER,
+            "field": "financial_statements",
+            "reason": "no_financial_statement_rows",
+        }
+    ]
 
 
 def test_krx_ingestion_uses_short_code_when_isu_cd_is_isin(
@@ -922,6 +1276,166 @@ def test_persist_krx_stock_master_upserts_market_stock_rows(
     assert seeded_session.get(Stock, "123456").company_name == "테스트바이오2"
     seeded_session.refresh(price)
     assert price.close_price == 12800
+
+
+def test_persist_krx_stock_master_calculates_latest_20_day_price_metrics(
+    seeded_session: Session,
+) -> None:
+    seeded_session.query(PriceMetric).filter(PriceMetric.ticker == "234567").delete()
+    seeded_session.query(Stock).filter(Stock.ticker == "234567").delete()
+    seeded_session.commit()
+
+    for offset in range(21):
+        trade_date = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=offset)
+        persist_krx_stock_master(
+            seeded_session,
+            market="KOSDAQ",
+            payload={
+                "base_date": trade_date.strftime("%Y%m%d"),
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": trade_date.strftime("%Y%m%d"),
+                        "ISU_SRT_CD": "234567",
+                        "ISU_ABBRV": "테스트지표",
+                        "MKT_NM": "KOSDAQ",
+                        "TDD_CLSPRC": str(100 + offset),
+                        "ACC_TRDVOL": "1,000",
+                        "ACC_TRDVAL": "100,000",
+                        "MKTCAP": "1,000,000,000",
+                    }
+                ],
+            },
+        )
+
+    latest = seeded_session.scalars(
+        select(PriceMetric)
+        .where(PriceMetric.ticker == "234567")
+        .order_by(PriceMetric.trade_date.desc())
+    ).first()
+
+    assert latest is not None
+    assert float(latest.momentum_20d) == pytest.approx(0.2)
+    assert latest.volatility_20d is not None
+    assert float(latest.volatility_20d) > 0
+
+
+def test_provider_krx_prices_calculate_latest_20_day_price_metrics(
+    seeded_session: Session,
+) -> None:
+    seeded_session.query(PriceMetric).filter(PriceMetric.ticker == "345678").delete()
+    seeded_session.query(Stock).filter(Stock.ticker == "345678").delete()
+    seeded_session.add(
+        Stock(
+            ticker="345678",
+            company_name="테스트가격",
+            market="KOSPI",
+            is_active=True,
+        )
+    )
+    seeded_session.commit()
+    service = ProviderIngestionService(seeded_session)
+
+    for offset in range(21):
+        trade_date = datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=offset)
+        service._persist_krx_prices(
+            ticker="345678",
+            result=ExternalApiResult(
+                provider=KRX_PROVIDER,
+                endpoint="/daily",
+                cache_key=f"krx:345678:{trade_date:%Y%m%d}",
+                data_status="available",
+                status_code=200,
+                payload={
+                    "base_date": trade_date.strftime("%Y%m%d"),
+                    "OutBlock_1": [
+                        {
+                            "BAS_DD": trade_date.strftime("%Y%m%d"),
+                            "ISU_SRT_CD": "345678",
+                            "TDD_CLSPRC": str(100 + offset),
+                            "ACC_TRDVOL": "1,000",
+                            "ACC_TRDVAL": "100,000",
+                            "MKTCAP": "1,000,000,000",
+                        }
+                    ],
+                },
+            ),
+            raw_archive_uri=None,
+        )
+
+    latest = seeded_session.scalars(
+        select(PriceMetric)
+        .where(PriceMetric.ticker == "345678")
+        .order_by(PriceMetric.trade_date.desc())
+    ).first()
+
+    assert latest is not None
+    assert float(latest.momentum_20d) == pytest.approx(0.2)
+    assert latest.volatility_20d is not None
+    assert float(latest.volatility_20d) > 0
+
+
+def test_seed_krx_stock_universe_accepts_multiple_source_dates(
+    monkeypatch,
+    seeded_session: Session,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_daily_trading(
+        self,
+        *,
+        ticker: str,
+        base_date: str,
+        market: str = "KOSPI",
+        bypass_cache: bool = False,
+    ):
+        calls.append((base_date, market))
+        return ExternalApiResult(
+            provider=KRX_PROVIDER,
+            endpoint="/daily",
+            cache_key=f"krx:{market}:{base_date}",
+            data_status="available",
+            status_code=200,
+            payload={
+                "base_date": base_date,
+                "OutBlock_1": [
+                    {
+                        "BAS_DD": base_date,
+                        "ISU_SRT_CD": "345678",
+                        "ISU_ABBRV": "테스트백필",
+                        "MKT_NM": market,
+                        "TDD_CLSPRC": "1,000",
+                    }
+                ],
+            },
+        )
+
+    class ExistingSessionFactory:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return seeded_session
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr("app.services.ingestion.KrxClient.daily_trading", fake_daily_trading)
+    monkeypatch.setattr(
+        "app.services.ingestion.get_session_factory",
+        lambda: ExistingSessionFactory(),
+    )
+
+    result = ingestion_module.seed_krx_stock_universe_from_event(
+        {
+            "stockbrief_operation": "seed_krx_stock_universe",
+            "source_dates": ["2026-07-01", "20260702", "20260702"],
+            "markets": ["KOSPI"],
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["source_dates"] == ["20260701", "20260702"]
+    assert calls == [("20260701", "KOSPI"), ("20260702", "KOSPI")]
 
 
 def test_krx_ingestion_marks_partial_failed_when_no_price_rows_persist(
@@ -1139,7 +1653,15 @@ def test_persist_failure_rolls_back_normalized_rows_before_marking_failed(
     monkeypatch,
     seeded_session: Session,
 ) -> None:
-    def fake_list_disclosures(self, *, ticker: str, corp_code=None, page_count: int = 10):
+    def fake_list_disclosures(
+        self,
+        *,
+        ticker: str,
+        corp_code=None,
+        page_count: int = 10,
+        bgn_de=None,
+        end_de=None,
+    ):
         return ExternalApiResult(
             provider=OPENDART_PROVIDER,
             endpoint="/list.json",

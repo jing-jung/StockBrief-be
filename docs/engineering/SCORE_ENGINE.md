@@ -108,6 +108,17 @@ Rules:
 - Persist all 8 components even when some inputs are missing.
 - Use `score_version="factor-rank-2026-06-30"` for the score result and each component `rule_version`.
 - If fallback price metrics are used, list the component names in `fallback_data`.
+- `momentum_volatility` uses the latest KRX `price_metrics.momentum_20d` and
+  `price_metrics.volatility_20d`. KRX stock-universe bootstrap and ticker-level
+  KRX refresh calculate those fields only after at least 21 real KRX
+  close-price rows exist for the ticker.
+- Financial statement components must use real `financial_statements` rows.
+  Mock or fallback financial rows are excluded; missing real statements should
+  remain visible as component `missing_data` instead of being backfilled with
+  synthetic values.
+- `disclosure_event` uses OpenDART disclosure evidence whose `published_at` is
+  on or before the score `as_of` date. This lets an operator fetch historical
+  filings after the fact and still materialize the correct historical score.
 
 ## 5. Evidence Level
 

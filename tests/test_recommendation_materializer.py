@@ -180,6 +180,73 @@ def test_materializer_ignores_legacy_mock_evidence_rows(
     assert "evXmock_005930_news" in component_evidence
 
 
+def test_materializer_scores_disclosures_published_before_as_of_even_if_fetched_later(
+    seeded_session: Session,
+) -> None:
+    ticker = "654321"
+    if seeded_session.get(Stock, ticker) is None:
+        seeded_session.add(
+            Stock(
+                ticker=ticker,
+                company_name="테스트공시",
+                market="KOSPI",
+                is_active=True,
+            )
+        )
+    published_at = datetime(2026, 6, 8, 9, 0, tzinfo=timezone.utc)
+    fetched_at = datetime(2026, 7, 6, 9, 0, tzinfo=timezone.utc)
+    source = SourceDocument(
+        ticker=ticker,
+        source_type="disclosure",
+        source_name="OpenDART",
+        source_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=202606080001",
+        external_id="202606080001",
+        title="주요사항보고서",
+        published_at=published_at,
+        fetched_at=fetched_at,
+        raw_content="{}",
+        metadata_={"provider": "OpenDART"},
+    )
+    seeded_session.add(source)
+    seeded_session.flush()
+    seeded_session.add(
+        EvidenceChunk(
+            evidence_id="ev_opendart_654321_202606080001",
+            ticker=ticker,
+            source_document_id=source.id,
+            evidence_type="disclosure",
+            chunk_text="주요사항보고서",
+            source_url=source.source_url,
+            published_at=published_at,
+            fetched_at=fetched_at,
+            confidence=Decimal("0.9000"),
+            metadata_={"provider": "OpenDART"},
+        )
+    )
+    seeded_session.commit()
+
+    materialize_recommendation_scores(
+        seeded_session,
+        as_of_date=AS_OF_DATE,
+        tickers=[ticker],
+    )
+
+    score = seeded_session.scalars(
+        select(RecommendationScore).where(
+            RecommendationScore.ticker == ticker,
+            RecommendationScore.as_of_date == AS_OF_DATE,
+            RecommendationScore.score_version == SCORE_VERSION,
+        )
+    ).one()
+    disclosure_component = next(
+        item for item in score.component_scores if item["name"] == "disclosure_event"
+    )
+
+    assert disclosure_component["raw_score"] is not None
+    assert "ev_opendart_654321_202606080001" in disclosure_component["evidence_ids"]
+    assert "disclosure_event.inputs" not in score.missing_data
+
+
 def test_materializer_ignores_mock_financial_and_fallback_price_rows(
     seeded_session: Session,
 ) -> None:

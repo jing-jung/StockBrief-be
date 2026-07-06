@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.orm import (
@@ -148,7 +148,10 @@ def _evidence(
         .join(SourceDocument, SourceDocument.id == EvidenceChunk.source_document_id)
         .where(
             EvidenceChunk.ticker == ticker,
-            EvidenceChunk.fetched_at <= cutoff,
+            or_(
+                EvidenceChunk.fetched_at <= cutoff,
+                EvidenceChunk.published_at <= cutoff,
+            ),
             ~EvidenceChunk.evidence_id.startswith("ev_mock_", autoescape=True),
         )
         .order_by(EvidenceChunk.fetched_at.desc(), EvidenceChunk.evidence_id.asc())
