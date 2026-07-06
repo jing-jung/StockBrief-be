@@ -70,6 +70,18 @@ def test_stock_search_returns_seeded_stocks(seeded_api_client: TestClient) -> No
     assert data["items"][0]["match_reason"] in {"name", "ticker", "keyword", "default"}
 
 
+def test_stock_search_matches_spaced_and_english_names(seeded_api_client: TestClient) -> None:
+    spaced_response = seeded_api_client.get("/v1/stocks/search", params={"q": "삼성 전자"})
+    english_response = seeded_api_client.get("/v1/stocks/search", params={"q": "Samsung"})
+
+    assert spaced_response.status_code == 200
+    assert english_response.status_code == 200
+    spaced_items = spaced_response.json()["data"]["items"]
+    english_items = english_response.json()["data"]["items"]
+    assert any(item["ticker"] == "005930" for item in spaced_items)
+    assert any(item["ticker"] == "005930" for item in english_items)
+
+
 def test_stock_search_escapes_like_wildcards(seeded_api_client: TestClient) -> None:
     response = seeded_api_client.get("/v1/stocks/search", params={"q": "%"})
 
@@ -91,6 +103,25 @@ def test_stock_detail_returns_identifiers(seeded_api_client: TestClient) -> None
     assert data["stock"]["corp_code"] == "00126380"
     assert {"stock", "price", "score", "brief", "evidence_preview"}.issubset(data)
     assert {"total", "grade", "as_of", "version", "breakdown"}.issubset(data["score"])
+
+
+def test_stock_detail_returns_basic_data_when_score_is_missing(
+    seeded_api_client: TestClient,
+    seeded_session: Session,
+) -> None:
+    seeded_session.execute(
+        delete(RecommendationScore).where(RecommendationScore.ticker == "005930")
+    )
+    seeded_session.commit()
+
+    response = seeded_api_client.get("/v1/stocks/005930")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["stock"]["ticker"] == "005930"
+    assert data["score"]["version"] == "unscored"
+    assert data["score"]["grade"] == "확인 필요"
+    assert data["brief"]["summary"] == "삼성전자는 아직 추천 후보 점수가 산정되지 않았습니다."
 
 
 def test_stock_candidates_respect_risk_profile_sorting(
