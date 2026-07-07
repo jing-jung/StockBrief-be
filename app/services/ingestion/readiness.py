@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.db import get_session_factory
-from app.orm import CompanyIdentifier
+from app.orm import CompanyIdentifier, Disclosure, EvidenceChunk, SourceDocument
 from app.seed.stock_universe import STOCK_UNIVERSE
 from app.services.external.clients import KRX_PROVIDER, NAVER_PROVIDER, OPENDART_PROVIDER
 from app.services.external.transport import urllib_transport
@@ -99,6 +99,52 @@ def check_opendart_corp_code_alignment(
         "operation": "check_opendart_corp_code_alignment",
         "rows": rows,
         "mismatches": mismatches,
+    }
+
+def reconcile_opendart_evidence_tickers(event: dict[str, object] | None = None) -> dict[str, Any]:
+    request = event or {}
+    tickers = _event_tickers(request)
+    dry_run = bool(request.get("dry_run", True))
+    with get_session_factory()() as session:
+        statement = (
+            select(EvidenceChunk, Disclosure)
+            .join(SourceDocument, EvidenceChunk.source_document_id == SourceDocument.id)
+            .join(
+                Disclosure,
+                (Disclosure.provider == OPENDART_PROVIDER)
+                & (Disclosure.receipt_no == SourceDocument.external_id),
+            )
+            .where(
+                EvidenceChunk.evidence_type == "disclosure",
+                SourceDocument.source_name == OPENDART_PROVIDER,
+            )
+        )
+        if tickers:
+            statement = statement.where(EvidenceChunk.ticker.in_(tickers))
+        pairs = session.execute(statement).all()
+        stale_chunks = [
+            chunk
+            for chunk, disclosure in pairs
+            if chunk.ticker != disclosure.ticker
+        ]
+        removed = [
+            {
+                "evidence_id": chunk.evidence_id,
+                "ticker": chunk.ticker,
+                "source_document_id": str(chunk.source_document_id),
+            }
+            for chunk in stale_chunks
+        ]
+        if not dry_run:
+            for chunk in stale_chunks:
+                session.delete(chunk)
+            session.commit()
+    return {
+        "ok": True,
+        "operation": "reconcile_opendart_evidence_tickers",
+        "dry_run": dry_run,
+        "stale_count": len(stale_chunks),
+        "removed": removed,
     }
 
 def check_ingestion_scheduler_enable_gate(event: dict[str, object] | None = None) -> dict[str, Any]:

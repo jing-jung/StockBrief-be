@@ -14,6 +14,7 @@ from app.services.ingestion import (
     get_ingestion_status,
     handle_ingestion_event,
     handle_refresh_score_snapshots_event,
+    reconcile_opendart_evidence_tickers,
     reconcile_stale_ingestion_runs,
     seed_krx_stock_universe_from_event,
 )
@@ -49,6 +50,8 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
         return get_ingestion_status(event)
     if operation == "reconcile_stale_ingestion_runs":
         return reconcile_stale_ingestion_runs(event)
+    if operation == "reconcile_opendart_evidence_tickers":
+        return reconcile_opendart_evidence_tickers(event)
     return {
         "ok": False,
         "error": "unsupported_operation",
@@ -66,6 +69,7 @@ def handle_maintenance_event(event: dict[str, object]) -> dict[str, object]:
             "refresh_score_snapshots",
             "get_ingestion_status",
             "reconcile_stale_ingestion_runs",
+            "reconcile_opendart_evidence_tickers",
         ],
     }
 

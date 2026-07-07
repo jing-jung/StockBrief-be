@@ -101,6 +101,7 @@ from app.services.ingestion.readiness import (
     check_provider_egress,
     check_raw_archive_write,
     hydrate_external_api_settings,
+    reconcile_opendart_evidence_tickers,
 )
 from app.services.ingestion.request import (
     MAX_KRX_STOCK_UNIVERSE_SOURCE_DATES,
