@@ -163,6 +163,7 @@ class SourceDocument(Base):
     __table_args__ = (
         UniqueConstraint("source_name", "external_id", name="uq_source_documents_source_external_id"),
         Index("ix_source_documents_ticker_source_type", "ticker", "source_type"),
+        Index("ix_source_documents_source_type_id_published_at", "source_type", "id", "published_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid_pk)
@@ -264,6 +265,7 @@ class EvidenceChunk(Base):
     __table_args__ = (
         UniqueConstraint("evidence_id", name="uq_evidence_chunks_evidence_id"),
         Index("ix_evidence_chunks_ticker_evidence_type", "ticker", "evidence_type"),
+        Index("ix_evidence_chunks_ticker_published_at", "ticker", "published_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid_pk)

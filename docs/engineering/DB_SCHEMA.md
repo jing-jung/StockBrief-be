@@ -415,13 +415,19 @@ Stores user and assistant chat messages with safety metadata.
 - Unique `chat_messages.message_id`.
 - Index `recommendation_scores(as_of_date, is_candidate_eligible, total_score desc)`.
 - Index `evidence_chunks(ticker, evidence_type)`.
+- Index `evidence_chunks(ticker, published_at)` for the actual candidate
+  evidence summary and evidence listing paths filtered by ticker and ordered or
+  aggregated by source publication time.
+- Index `source_documents(source_type, id, published_at)` for the joined
+  evidence listing and candidate summary source-type filter.
 - Index `risk_signals(ticker, as_of)`.
 - Index `chat_messages(session_id)` for authenticated chat session detail reads.
 - Index `ingestion_runs(job_type, provider, status)`.
 - Index `ingestion_runs(started_at)`.
-- Index `news_items(ticker, published_at)` for evidence and candidate summary
-  lookups filtered by ticker and ordered/aggregated by published_at.
-- Index `disclosures(ticker, published_at)` for the same access pattern.
+- Index `news_items(ticker, published_at)` for normalized news item lookups by
+  ticker and publication time.
+- Index `disclosures(ticker, published_at)` for normalized disclosure lookups by
+  ticker and publication time.
 
 ## 5. Recommendation Score JSON Example
 

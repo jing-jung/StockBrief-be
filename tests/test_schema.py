@@ -10,9 +10,11 @@ from app.orm import (
     ChatMessage,
     CompanyIdentifier,
     Disclosure,
+    EvidenceChunk,
     IngestionRun,
     NewsItem,
     RecommendationScore,
+    SourceDocument,
     User,
     Watchlist,
 )
@@ -169,6 +171,80 @@ def test_news_disclosure_index_migration_is_declared() -> None:
     assert (
         'down_revision: str | None = "0005_chat_messages_session_id_index"' in migration
     )
+
+
+def test_evidence_lookup_path_indexes_are_declared() -> None:
+    evidence_indexes = {index.name for index in EvidenceChunk.__table__.indexes}
+    source_indexes = {index.name for index in SourceDocument.__table__.indexes}
+
+    assert "ix_evidence_chunks_ticker_published_at" in evidence_indexes
+    assert "ix_source_documents_source_type_id_published_at" in source_indexes
+
+
+def test_create_all_builds_evidence_lookup_path_indexes() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    evidence_indexes = {index["name"] for index in inspector.get_indexes("evidence_chunks")}
+    source_indexes = {index["name"] for index in inspector.get_indexes("source_documents")}
+
+    assert "ix_evidence_chunks_ticker_published_at" in evidence_indexes
+    assert "ix_source_documents_source_type_id_published_at" in source_indexes
+
+
+def test_evidence_lookup_index_migration_is_declared() -> None:
+    migration = (
+        API_ROOT
+        / "migrations/versions/0007_evidence_lookup_path_indexes.py"
+    ).read_text()
+
+    assert "ix_evidence_chunks_ticker_published_at" in migration
+    assert "ix_source_documents_source_type_id_published_at" in migration
+    assert '"evidence_chunks"' in migration
+    assert '"source_documents"' in migration
+    assert (
+        'down_revision: str | None = "0006_news_disclosure_ticker_published_at_index"'
+        in migration
+    )
+    assert 'context.dialect.name == "postgresql"' in migration
+    assert "context.autocommit_block()" in migration
+    assert "postgresql_concurrently=True" in migration
+
+
+def test_evidence_chunk_lookup_plan_uses_ticker_published_at_index() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with engine.connect() as connection:
+        plan = connection.execute(
+            text(
+                "EXPLAIN QUERY PLAN "
+                "SELECT * FROM evidence_chunks "
+                "WHERE ticker = '005930' "
+                "ORDER BY published_at DESC"
+            )
+        ).fetchall()
+
+    plan_text = " ".join(str(column) for row in plan for column in row)
+    assert "ix_evidence_chunks_ticker_published_at" in plan_text
+
+
+def test_source_document_source_type_plan_uses_source_type_index() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    with engine.connect() as connection:
+        plan = connection.execute(
+            text(
+                "EXPLAIN QUERY PLAN "
+                "SELECT * FROM source_documents "
+                "WHERE source_type IN ('news', 'disclosure')"
+            )
+        ).fetchall()
+
+    plan_text = " ".join(str(column) for row in plan for column in row)
+    assert "ix_source_documents_source_type_id_published_at" in plan_text
 
 
 def test_ingestion_runs_migration_creates_table() -> None:
