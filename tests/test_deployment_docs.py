@@ -176,6 +176,74 @@ def test_pyproject_declares_pytest_cov_dev_dependency() -> None:
     assert "pytest-cov" in pyproject
 
 
+THIRD_PARTY_ACTION_PINS = {
+    # action -> (expected commit SHA, trailing version comment)
+    "astral-sh/setup-uv": ("fac544c07dec837d0ccb6301d7b5580bf5edae39", "v8.2.0"),
+    "hashicorp/setup-terraform": ("dfe3c3f87815947d99a8997f908cb6525fc44e9e", "v4.0.1"),
+    "aquasecurity/trivy-action": ("ed142fd0673e97e23eac54620cfb913e5ce36c25", "v0.36.0"),
+}
+
+FIRST_PARTY_ACTION_TAG_PATTERNS = [
+    r"actions/checkout@v\d+",
+    r"actions/upload-artifact@v\d+",
+    r"actions/github-script@v\d+",
+    r"aws-actions/configure-aws-credentials@v\d+",
+    r"github/codeql-action/(init|analyze)@v\d+",
+]
+
+
+def _workflow_uses_lines(workflow: str) -> list[str]:
+    return [line.strip() for line in workflow.splitlines() if "uses:" in line]
+
+
+def test_third_party_actions_are_pinned_to_commit_shas() -> None:
+    workflow_dir = REPOSITORY_ROOT / ".github/workflows"
+    for workflow_path in sorted(workflow_dir.glob("*.yml")):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for action, (sha, version_comment) in THIRD_PARTY_ACTION_PINS.items():
+            for line in _workflow_uses_lines(workflow):
+                if f"uses: {action}@" not in line:
+                    continue
+                assert f"uses: {action}@{sha} # {version_comment}" in line, (
+                    f"{workflow_path.name} does not pin {action} to the "
+                    f"expected commit SHA with a trailing version comment: {line}"
+                )
+
+
+def test_first_party_actions_stay_on_version_tags() -> None:
+    workflow_dir = REPOSITORY_ROOT / ".github/workflows"
+    combined = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(workflow_dir.glob("*.yml"))
+    )
+
+    for pattern in FIRST_PARTY_ACTION_TAG_PATTERNS:
+        assert re.search(pattern, combined), (
+            f"Expected first-party action pattern not found on a version tag: {pattern}"
+        )
+
+
+def test_backend_ci_and_dev_deploy_pin_setup_uv_and_terraform() -> None:
+    ci_workflow = (REPOSITORY_ROOT / ".github/workflows/backend-ci.yml").read_text(
+        encoding="utf-8"
+    )
+    deploy_workflow = (
+        REPOSITORY_ROOT / ".github/workflows/backend-dev-deploy.yml"
+    ).read_text(encoding="utf-8")
+
+    setup_uv_sha, setup_uv_version = THIRD_PARTY_ACTION_PINS["astral-sh/setup-uv"]
+    terraform_sha, terraform_version = THIRD_PARTY_ACTION_PINS["hashicorp/setup-terraform"]
+
+    for workflow in (ci_workflow, deploy_workflow):
+        assert f"astral-sh/setup-uv@{setup_uv_sha} # {setup_uv_version}" in workflow
+        assert f"hashicorp/setup-terraform@{terraform_sha} # {terraform_version}" in workflow
+
+
+def test_dependabot_covers_github_actions_ecosystem() -> None:
+    dependabot = (REPOSITORY_ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+
+    assert "package-ecosystem: github-actions" in dependabot
+
+
 def test_bedrock_chat_smoke_runbook_documents_redacted_validation() -> None:
     terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
         encoding="utf-8"
