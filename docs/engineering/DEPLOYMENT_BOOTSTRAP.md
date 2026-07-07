@@ -17,8 +17,8 @@ first OIDC provider, IAM role, Terraform state bucket, and lock table cannot be
 created by that role because it does not exist yet.
 
 For a new AWS account, run the bootstrap script once with an administrator or
-platform-admin AWS identity. After that, pushes to `main` can deploy through
-GitHub Actions.
+platform-admin AWS identity. After that, `main` commits deploy through GitHub Actions
+once `backend-ci` succeeds for that commit (workflow_run gate).
 
 AWS recommends using an IAM OIDC provider and short-term role credentials for
 GitHub Actions instead of storing long-lived IAM user keys. The provider URL must
@@ -186,7 +186,7 @@ API Gateway, Cognito, Secrets Manager, and alarms are managed by Terraform.
 6. The workflow packages Lambda, initializes Terraform with
    `backends/<target_env>.hcl`, plans with
    `envs/<target_env>/deploy.auto.tfvars.json`, and applies the selected stack
-   for pushes to `main`.
+   for `main` commits whose `backend-ci` run succeeded.
    If those profile files are not committed, the workflow creates them at
    runtime from the selected GitHub Environment variables
    `TF_BACKEND_CONFIG_HCL` and `TFVARS_JSON`.

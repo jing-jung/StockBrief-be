@@ -30,6 +30,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Verify auto-merge label and PR state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "invalid pr_number: $PR_NUMBER"
+            exit 1
+          fi
+
+          pr_json="$(gh pr view "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,isDraft,baseRefName,labels)"
+          echo "$pr_json"
+
+          is_draft="$(echo "$pr_json" | jq -r '.isDraft')"
+          base_ref="$(echo "$pr_json" | jq -r '.baseRefName')"
+          has_label="$(echo "$pr_json" | jq -r '[.labels[].name] | contains(["auto-merge"])')"
+
+          if [ "$is_draft" != "false" ] || [ "$base_ref" != "main" ] || [ "$has_label" != "true" ]; then
+            echo "PR #$PR_NUMBER is not eligible: draft=$is_draft base=$base_ref auto-merge-label=$has_label"
+            exit 1
+          fi
+
       - name: Enable squash auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

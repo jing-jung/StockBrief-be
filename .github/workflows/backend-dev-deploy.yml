@@ -1,7 +1,9 @@
 name: backend-dev-deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [backend-ci]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -32,13 +34,21 @@ concurrency:
 jobs:
   deploy-dev:
     name: Deploy dev backend
+    # Deploy only after backend-ci succeeded on main (or on explicit dispatch).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.target_env || 'dev' }}
     timeout-minutes: 35
     env:
       TARGET_ENV: ${{ github.event.inputs.target_env || 'dev' }}
     steps:
+      # Deploy the exact commit backend-ci validated, not whatever main
+      # points at when this workflow starts.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Resolve deploy profile
         id: deploy-profile
@@ -101,12 +111,12 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
 
       - name: Terraform apply
-        if: github.event_name == 'push' || inputs.apply == true
+        if: github.event_name == 'workflow_run' || inputs.apply == true
         run: terraform apply -input=false -auto-approve tfplan
         working-directory: ${{ env.TF_DIR }}
 
       - name: Direct deploy AgentCore Runtime
-        if: github.event_name == 'push' || inputs.apply == true
+        if: github.event_name == 'workflow_run' || inputs.apply == true
         run: |
           runtime_role_arn="$(terraform -chdir="${TF_DIR}" output -raw agentcore_runtime_role_arn)"
           uv run python scripts/deploy_agentcore_runtime.py \
@@ -115,7 +125,7 @@ jobs:
             --role-arn "$runtime_role_arn"
 
       - name: Terraform plan after AgentCore direct deploy
-        if: github.event_name == 'push' || inputs.apply == true
+        if: github.event_name == 'workflow_run' || inputs.apply == true
         run: >-
           terraform plan
           -input=false
@@ -125,7 +135,7 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
 
       - name: Terraform apply after AgentCore direct deploy
-        if: github.event_name == 'push' || inputs.apply == true
+        if: github.event_name == 'workflow_run' || inputs.apply == true
         run: terraform apply -input=false -auto-approve tfplan-after-agentcore
         working-directory: ${{ env.TF_DIR }}
 

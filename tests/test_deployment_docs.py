@@ -227,7 +227,13 @@ def test_backend_dev_deploy_checks_assumed_account_matches_backend() -> None:
     assert "target_env:" in workflow
     assert "apply:" in workflow
     assert "default: false" in workflow
-    assert "github.event_name == 'push' || inputs.apply == true" in workflow
+    # Deploys are gated on backend-ci success (workflow_run), never raw push.
+    assert "workflow_run:" in workflow
+    assert "workflows: [backend-ci]" in workflow
+    assert "push:" not in workflow
+    assert "github.event.workflow_run.conclusion == 'success'" in workflow
+    assert "ref: ${{ github.event.workflow_run.head_sha || github.ref }}" in workflow
+    assert "github.event_name == 'workflow_run' || inputs.apply == true" in workflow
     assert "Skip Terraform apply" in workflow
     assert "Plan-only validation completed" in workflow
     assert 'TARGET_ENV: ${{ github.event.inputs.target_env || \'dev\' }}' in workflow
