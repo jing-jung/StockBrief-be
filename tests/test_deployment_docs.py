@@ -142,6 +142,40 @@ def test_backend_ci_checks_lambda_packaging_script_on_pr() -> None:
     assert 'test "$first_hash" = "$second_hash"' in workflow
 
 
+def test_backend_ci_enforces_coverage_gate() -> None:
+    workflow = (REPOSITORY_ROOT / ".github/workflows/backend-ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--cov=app" in workflow
+    assert "--cov-report=term-missing" in workflow
+    assert "--cov-fail-under=80" in workflow
+
+
+def test_backend_ci_runs_alembic_migration_smoke_test() -> None:
+    workflow = (REPOSITORY_ROOT / ".github/workflows/backend-ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "migration-smoke:" in workflow
+    assert "postgres:16" in workflow
+    assert "APP_ENV: local" in workflow
+    assert (
+        "DATABASE_URL: postgresql+psycopg://stockbrief:stockbrief@localhost:5432/stockbrief"
+        in workflow
+    )
+    assert "uv run alembic upgrade head" in workflow
+    assert "uv run alembic downgrade base" in workflow
+    assert workflow.count("uv run alembic upgrade head") == 2
+    assert "needs: [test, migration-smoke, codeql, security]" in workflow
+
+
+def test_pyproject_declares_pytest_cov_dev_dependency() -> None:
+    pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "pytest-cov" in pyproject
+
+
 def test_bedrock_chat_smoke_runbook_documents_redacted_validation() -> None:
     terraform_readme = (REPOSITORY_ROOT / "infra/terraform/README.md").read_text(
         encoding="utf-8"

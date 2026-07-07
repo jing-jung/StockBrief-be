@@ -49,7 +49,7 @@ jobs:
           test "$first_hash" = "$second_hash"
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 
       - name: Scan prohibited terms
         run: uv run python scripts/check_prohibited_terms.py
@@ -69,6 +69,48 @@ jobs:
       - name: Terraform validate
         run: terraform validate -no-color
         working-directory: infra/terraform
+
+  migration-smoke:
+    name: Alembic migration smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stockbrief
+          POSTGRES_PASSWORD: stockbrief
+          POSTGRES_DB: stockbrief
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stockbrief"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ENV: local
+      DATABASE_URL: postgresql+psycopg://stockbrief:stockbrief@localhost:5432/stockbrief
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev --python 3.13
+
+      - name: Upgrade to head
+        run: uv run alembic upgrade head
+
+      - name: Downgrade to base
+        run: uv run alembic downgrade base
+
+      - name: Upgrade to head again
+        run: uv run alembic upgrade head
 
   codeql:
     name: CodeQL code scanning
@@ -114,7 +156,7 @@ jobs:
   package-deploy:
     name: Package deployment artifact
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    needs: [test, codeql, security]
+    needs: [test, migration-smoke, codeql, security]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
