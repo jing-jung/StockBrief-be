@@ -65,7 +65,7 @@ STOCK_UNIVERSE = [
         sector="화학",
         industry="기초 화학물질 제조업",
         listing_date=date(2001, 4, 25),
-        corp_code="00356370",
+        corp_code="00356361",
     ),
     StockUniverseItem(
         ticker="006400",
@@ -105,7 +105,7 @@ STOCK_UNIVERSE = [
         sector="자동차",
         industry="자동차 제조업",
         listing_date=date(1973, 7, 21),
-        corp_code="00164751",
+        corp_code="00106641",
     ),
     StockUniverseItem(
         ticker="012330",
@@ -125,7 +125,7 @@ STOCK_UNIVERSE = [
         sector="2차전지",
         industry="축전지 제조업",
         listing_date=date(2022, 1, 27),
-        corp_code="01640342",
+        corp_code="01515323",
     ),
     StockUniverseItem(
         ticker="207940",
